@@ -2,8 +2,13 @@
 
 Author: Arsy Syamil
 
-Single-file rewrite of `../QE_workflow`. The old directory is untouched and
-still works; this one exists so the two can be compared before switching.
+Rewrite of `../QE_workflow` (v1). v1 is retired — everything it did is here,
+including its `script/check_job.sh`, which came back as the `check` step.
+
+Layout: a thin `qe.sh` that resolves paths, loads settings, declares which
+steps exist and runs them, plus `lib/` with one file per concern. The files are
+*sourced* into one process, so there is one environment and one `config.sh` —
+which is what v1 got wrong, not the fact that it had several files.
 
 ## Workflow
 
@@ -20,6 +25,7 @@ still works; this one exists so the two can be compared before switching.
     bash qe.sh dump   case_relax.in    # print everything the parser read
     bash qe.sh gen-scf case_relax.in
     bash qe.sh scf     case_relax.in
+    bash qe.sh check   case_relax.in   # which stages finished, and why not
 
 A step name never ends in `_relax.in`, so both forms are unambiguous and any
 step accepts several cases (`qe.sh scf a_relax.in b_relax.in`).
@@ -69,12 +75,21 @@ checked against and the two that are rejected on purpose.
 
 ## Files
 
-    qe.sh                              everything
+    qe.sh                              orchestrator + the step registry
     config.sh                          settings you edit
+    lib/common.sh                      environment, per-case paths, diagnostics
+    lib/parser.sh                      reading the relax input
+    lib/structure.sh                   relaxed geometry out of the relax output
+    lib/generate.sh                    writing the scf / band / nscf inputs
+    lib/run.sh                         steps that launch pw.x / bands.x / dos.x
     SETUP.md                           what an input must satisfy to be accepted
     MAINTENANCE.md                     what is fixed, deliberate, and still open
     template/
       band.path.hexagonal_example      reference k-path, NOT applied automatically
+
+Adding a stage is two edits: write `step_<name>()` in the `lib/` file it
+belongs to, then add `<name>` to `PIPELINE_STEPS` in `qe.sh` where it runs. The
+step counters (`3/11`) come from that list, so nothing needs renumbering.
 
 Three documents, three audiences. This file says what the workflow *does*.
 `SETUP.md` says what an input must satisfy to be accepted — read it before
@@ -90,14 +105,20 @@ Per case, next to the input file:
 
 ## What changed from QE_workflow
 
-### 1. One file instead of twelve
+### 1. Six files instead of twelve, and none of them a separate process
 
-`run.sh` plus ten scripts in `script/` became `qe.sh`.
+`run.sh` plus ten scripts in `script/` became `qe.sh` + five `lib/` files.
+
+The count was never the point — v1's problem was that each helper was its own
+process with its own `config.sh`. These are **sourced**, so there is one
+environment and one settings file, and `emit_pw_input()` exists once instead of
+being copied three times.
 
 Deleted along the way:
 
-- The preflight loop checking that all eight helper scripts exist, and the
-  need to locate `script/` at all.
+- The preflight loop checking that all eight helper scripts exist. `qe.sh`
+  still verifies its five `lib/` files are present, but as one loop with a
+  message naming the missing file, not eight scattered checks.
 - Most of `get_script_dir()`. Note it is not fully gone: Slurm hands the batch
   script to the compute node as a spooled copy whose directory contains
   neither `config.sh` nor `template/`, so `resolve_root_dir()` still has to

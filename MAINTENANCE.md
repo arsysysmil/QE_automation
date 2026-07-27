@@ -17,9 +17,9 @@ These copies exist and they are NOT all in sync:
 | Copy | State |
 |---|---|
 | `QE_workflow_v2/` on the cluster | **authoritative** |
-| laptop `~/QE_workflow/` | mirror of this one, added 2026-07-27. `qe.sh` and `config.sh` are byte-identical to the cluster's and must stay that way (§1.6) — it is a deployment, not a fork. Local runs live in `cases/`. |
-| the v1 directory beside it | v1, twelve files, superseded. Kept for comparison only. Has the vc-relax cell bug of §1.1 and does not have the fixes below. Do not develop here. |
-| this repository | **oldest of the three.** Still has the `config.sh` clobbering bug (bare `SMEARING`/`DEGAUSS`/`MIXING_BETA`) that v1 already fixed. Anyone cloning that repo gets a version that silently computes SCF and bands with different smearing. Needs a push from here before it is used or shared. |
+| laptop `~/QE_workflow/` | mirror of this one, added 2026-07-27. `qe.sh`, `config.sh` and `lib/` are byte-identical to the cluster's and must stay that way (§1.6) — it is a deployment, not a fork. Local runs live in `cases/`. |
+| the v1 directory beside it | v1, twelve files, **retired 2026-07-27**. Everything it did is in the current layout, including `script/check_job.sh` which came back as the `check` step (§1b). Kept only as a historical reference: it still has the vc-relax cell bug of §1.1 and none of the fixes below. Do not run it and do not develop there. |
+| this repository | up to date as of 2026-07-27 (PRs #1 and #2). Code files identical to the cluster's; **only `MAINTENANCE.md` differs**, and only in §5, which is generalised there because the repo is public. Never publish the account or folder names from §5. |
 
 If a future session is asked to "fix the QE workflow", check which of these the
 files being looked at belong to before changing anything.
@@ -468,12 +468,22 @@ file is published. They are in the private copy on the cluster.)
 | 2026-07-24 | `qe.sh` | `a063a62252fbfe6d163e74b03ce2736a` | v2 as first written; kept as `qe.sh.bak_pre_cellfix_20260727` |
 | 2026-07-27 | `qe.sh` | `487139a31a69450aa532672d3e0c026a` | §1.1 + §1.2 + §1.3; kept as `qe.sh.bak_pre_portable_20260727` |
 | 2026-07-27 | `qe.sh` | `30b226e204cda8936b84405b8b65a658` | + §1.4 + §1.5 + §1.6; kept as `qe.sh.bak_pre_ibravcheck_20260727` |
-| 2026-07-27 | `qe.sh` | `405bc3176044c3ab206eed74a7d91817` | + §1.7 (current) |
+| 2026-07-27 | `qe.sh` | `405bc3176044c3ab206eed74a7d91817` | + §1.7; last single-file version, kept as `qe.sh.bak_pre_modular_20260727` |
+| 2026-07-27 | `qe.sh` | `8560fe7d6de54b4bb4c97f142b0d37d2` | modular layout (§1b) |
+| 2026-07-27 | `lib/common.sh` | `b0e2e159e041ec9c464e14e1e78ae141` | modular layout (§1b) |
+| 2026-07-27 | `lib/parser.sh` | `a6abf00c4e45ad53008771c7328b4869` | modular layout (§1b) |
+| 2026-07-27 | `lib/structure.sh` | `8ea073e9e8e1739d22a64f1dff56cb46` | modular layout (§1b) |
+| 2026-07-27 | `lib/generate.sh` | `5c9b3e9e91b663544b45f9e3edfcf317` | modular layout (§1b) |
+| 2026-07-27 | `lib/run.sh` | `e9e1a9ebbedf029434b549212b5bac76` | modular layout (§1b) |
 | 2026-07-27 | `config.sh` | `fa06568692f8ca91d82c8a5c2d955f3f` | §1.6; previous kept as `config.sh.bak_20260727` |
 
-**Both files must be byte-identical on the cluster and the laptop** — they
-autodetect the machine rather than being configured for it. Compare with
-`md5sum qe.sh config.sh` on each side; a difference is a bug, not a setting.
+**`qe.sh`, `config.sh` and every `lib/` file must be byte-identical on the
+cluster, the laptop and GitHub** — only `MAINTENANCE.md` differs, and only in
+§5, which is generalised in the published copy because the repo is public.
+They autodetect the machine rather than being configured for it, so there is
+never a reason for them to diverge. Compare with
+`md5sum qe.sh config.sh lib/*.sh` on each side; a difference is a bug, not a
+setting.
 
 Check the running copy with `md5sum qe.sh`. If it matches no row, someone
 edited it without adding an entry here — add one.

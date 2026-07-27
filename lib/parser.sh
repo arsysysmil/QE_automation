@@ -357,7 +357,16 @@ EOF
 }
 
 step_dump() {
-    require_cache
+    # Always re-parses, rather than requiring `parser` to have been run first.
+    # Two reasons: this is the command a first-time user is told to run to
+    # check their input, and failing it with "run the 'parser' step first" is
+    # a pointless obstacle; and its whole purpose is to show what the input
+    # says *now*, so reading a cache written before the last edit would be
+    # worse than useless - it would be misleading.
+    step_parser
+    echo ""
+    source "$CACHE_FILE"
+
     printf '%-14s: %s\n' \
         PREFIX "$PREFIX" OUTDIR "$OUTDIR" PSEUDO_DIR "$PSEUDO_DIR" \
         CALCULATION "$CALCULATION" IBRAV "$IBRAV" NAT "$NAT" NTYP "$NTYP" \

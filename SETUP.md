@@ -161,6 +161,11 @@ Then run:
     sbatch -p interactive qe.sh cases/...         # when short is full
     bash   qe.sh cases/ws2/ws2_relax.in           # laptop, no Slurm
 
+To ask what happened to a case that already ran — which stages finished, and
+a diagnosis for those that did not:
+
+    bash qe.sh check cases/ws2/ws2_relax.in
+
 If a run is interrupted (time limit, `scancel`), clear its scratch before
 re-running — `work/` is not reset automatically yet:
 

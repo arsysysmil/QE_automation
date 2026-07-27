@@ -248,6 +248,52 @@ but nothing verifies the path suits the lattice. Handing a cubic material the
 hexagonal example produces a band structure along a meaningless path, with no
 error — see §2. That is the residual risk when moving to a new material.
 
+## 1b. Layout: why lib/, and how to add a stage
+
+v1 was eleven files, v2 collapsed them into one, and this is the third shape:
+a thin `qe.sh` plus `lib/`. That is not a swing back to v1 — the two things
+that made v1 wrong are still gone.
+
+What actually broke v1 was never the file count:
+
+- each helper was launched with `bash -c`, i.e. its own login shell, which
+  re-sourced `/etc/profile` and swapped `mpirun` for one that could not launch
+  an Intel-MPI-linked `pw.x`;
+- each helper sourced `config.sh` on its own, in its own order, so
+  `generate_scf.sh` escaped the clobbering of §"config.sh no longer overwrites
+  your input" in README while `generate_band.sh` and `generate_nscf.sh` did
+  not;
+- the three generators duplicated ~225 lines, and duplication in separate
+  files is duplication you cannot see.
+
+`lib/` keeps all three fixed: the files are **sourced**, once, into one
+process — one environment, one `config.sh`, one `emit_pw_input()`. What comes
+back is only the browsability: ~80-390 lines per file, one concern each.
+
+    qe.sh              orchestrator: paths, config, the step registry, dispatch
+    lib/common.sh      environment, per-case paths, diagnostics, step_check
+    lib/parser.sh      reading the relax input into cache/parser.cache
+    lib/structure.sh   pulling the relaxed geometry out of the relax output
+    lib/generate.sh    writing the scf / band / nscf inputs
+    lib/run.sh         the steps that launch pw.x, bands.x, dos.x
+
+**Adding a stage** (work function, PDOS) is now two edits, not four:
+
+1. write `step_<name>()` in whichever `lib/` file it belongs to
+2. add `<name>` to `PIPELINE_STEPS` in `qe.sh`, where it runs
+
+The step numbers (`3/11`) are counted from that list, so nothing needs
+renumbering, and there is no second list of step names to keep in sync — the
+old `run_one_step()` and the validation `case` both enumerated them, and
+forgetting the second gave "unknown step" for a function that existed.
+Dispatch is `name -> step_<name>` with dashes mapped to underscores, and
+`qe.sh` checks at startup that every registered name has a function behind it.
+
+`step_check` is v1's `script/check_job.sh`, restored. Merging into one file
+had turned `check_done`/`diagnose_failure` into internals reachable only
+mid-run, which lost the ability to ask "what happened?" of a case that
+finished hours ago. `qe.sh check <case>_relax.in` now reports every stage.
+
 ## 2. Deliberate, not bugs
 
 - **`CASES_PARALLEL > 1` is experimental and slower here** (45–51 min vs 3 min

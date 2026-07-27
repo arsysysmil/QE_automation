@@ -1,0 +1,8 @@
+# per-case run directories: inputs are yours, everything below is regenerated
+cases/
+work/
+cache/
+logs/
+runlogs/
+slurm-*.out
+*.bak_*

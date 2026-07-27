@@ -66,7 +66,8 @@ size any `-t` for a contended run, not an idle one.
 
     <case>_relax.in     ibrav = 0 with an explicit CELL_PARAMETERS card,
                         and K_POINTS automatic (or gamma for a molecule)
-    <case>_band.path    the high-symmetry path for THIS lattice
+    <case>_band.path    written for you by `qe.sh init <case>_relax.in`, which
+                        measures the lattice and picks the matching path
 
 Anything else the input declares — `nbnd`, `nspin`, `vdw_corr`, a `HUBBARD`
 card, ... — is carried into the generated scf/band/nscf inputs automatically.
@@ -82,10 +83,11 @@ checked against and the two that are rejected on purpose.
     lib/structure.sh                   relaxed geometry out of the relax output
     lib/generate.sh                    writing the scf / band / nscf inputs
     lib/run.sh                         steps that launch pw.x / bands.x / dos.x
+    lib/init.sh                        lattice detection + band path
     SETUP.md                           what an input must satisfy to be accepted
     MAINTENANCE.md                     what is fixed, deliberate, and still open
     template/
-      band.path.hexagonal_example      reference k-path, NOT applied automatically
+      band.path.hex_gamma60_example      reference k-path, NOT applied automatically
 
 Adding a stage is two edits: write `step_<name>()` in the `lib/` file it
 belongs to, then add `<name>` to `PIPELINE_STEPS` in `qe.sh` where it runs. The
@@ -170,7 +172,7 @@ hexagonal; any other lattice would have produced a band structure along the
 wrong path with no error at all.
 
 v2 requires `<case>_band.path` next to the input and fails loudly if it is
-missing. `template/band.path.hexagonal_example` is a reference to copy from,
+missing. `template/band.path.hex_gamma60_example` is a reference to copy from,
 not a default.
 
 ### 4. Parameters are required only when they mean something

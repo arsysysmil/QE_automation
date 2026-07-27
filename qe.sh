@@ -25,6 +25,7 @@
 #   lib/structure.sh   pulling the relaxed geometry out of the relax output
 #   lib/generate.sh    writing the scf / band / nscf inputs
 #   lib/run.sh         the steps that launch pw.x, bands.x, dos.x
+#   lib/init.sh        detecting the lattice and writing the band path
 #
 # Steps share state through cache/parser.cache next to the input file, so a
 # single step can be re-run on its own after an earlier run produced it.
@@ -106,7 +107,7 @@ fi
 # different files. Sourcing here keeps one process, one environment, and one
 # config.sh - while the code goes back to being readable one file at a time.
 
-for _lib in common parser structure generate run; do
+for _lib in common parser structure generate run init; do
     if [[ ! -f "$ROOT_DIR/lib/${_lib}.sh" ]]; then
         echo "ERROR: lib/${_lib}.sh not found (looked in '$ROOT_DIR/lib')."
         echo "qe.sh, config.sh and lib/ have to sit in the same directory."
@@ -145,7 +146,7 @@ PIPELINE_STEPS=(
 )
 
 # Callable by name, but not part of `all`.
-EXTRA_STEPS=( all dump check )
+EXTRA_STEPS=( all dump check init )
 
 # Labels for the run header, where the bare step name reads badly.
 declare -A STEP_LABELS=(
@@ -171,6 +172,7 @@ declare -A STEP_HELP=(
     [dos]="run dos.x"
     [dump]="print everything the parser read (debugging)"
     [check]="report which of this case's outputs finished, and why not"
+    [init]="detect the lattice and write <case>_band.path"
 )
 
 step_function_for() {

@@ -61,15 +61,22 @@ sekali di file ini. Semuanya terbawa otomatis ke tahap berikutnya.
 
 ---
 
-## 4. Tambahkan file Band Path
-
-Salin template sesuai jenis kristal.
-
-Contoh (Hexagonal — graphene, MoS2, WS2):
+## 4. Buat file Band Path
 
 ```bash
-cp template/band.path.hexagonal_example \
-cases/mos2/mos2_band.path
+bash qe.sh init cases/mos2/mos2_relax.in
+```
+
+Perintah ini mengukur kisi dari `CELL_PARAMETERS` di input kamu, lalu menulis
+`mos2_band.path` dengan jalur simetri yang sesuai. Keluarannya:
+
+```text
+Lattice measured from mos2_relax.in:
+  a = 3.1900   b = 3.1900   c = 20.0000
+  alpha = 90.00   beta = 90.00   gamma = 60.00
+  -> hexagonal slab, gamma=60 setting  (2D: path stays at k_z = 0)
+
+Band path written: cases/mos2/mos2_band.path
 ```
 
 Sekarang folder menjadi
@@ -81,9 +88,23 @@ cases/
     └── mos2_band.path
 ```
 
-> Untuk kristal non-heksagonal, jalur ini harus ditulis sendiri. Workflow
-> mewajibkan filenya ada, tapi **tidak bisa memeriksa** apakah jalurnya cocok
-> dengan kisimu — jalur yang salah menghasilkan band structure tanpa error.
+**Baca baris `->` itu.** Kalau klasifikasinya bukan yang kamu maksud, jangan
+diteruskan. Kalau kisimu tidak dikenali, `init` menolak menebak dan menyuruh
+kamu menulis sendiri — itu disengaja, karena jalur yang salah menghasilkan
+band structure yang terlihat wajar tanpa error apa pun.
+
+Kisi yang dikenali: heksagonal (setting γ=60 dan γ=120, 2D maupun 3D), kubik
+sederhana, FCC, BCC, tetragonal, ortorombik.
+
+> **Kenapa tidak menyalin template saja?** Karena titik K berbeda antara
+> setting γ=60° dan γ=120°: (2/3,1/3,0) versus (1/3,1/3,0). Keduanya
+> heksagonal, tapi menyalin yang salah menaruh label "K" pada titik di dalam
+> zona Brillouin — untuk graphene, titik Dirac-nya hilang sama sekali dan
+> tidak ada pesan error. `init` membedakannya dari sudut yang diukur.
+>
+> Template masih ada di `template/` kalau kamu perlu menulis jalur sendiri,
+> dengan nama yang menyebut setting-nya: `band.path.hex_gamma60_example` dan
+> `band.path.hex_gamma120_example`.
 
 ---
 

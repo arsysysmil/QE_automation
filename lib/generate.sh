@@ -104,7 +104,7 @@ step_gen_band() {
         echo "material's own high-symmetry path (use __BAND_POINTS__ where the"
         echo "per-segment point count from config.sh should be substituted)."
         echo "Hexagonal example (graphene/MoS2/WS2-like only):"
-        echo "  $ROOT_DIR/template/band.path.hexagonal_example"
+        echo "  $ROOT_DIR/template/band.path.hex_gamma60_example"
         exit 1
     fi
 

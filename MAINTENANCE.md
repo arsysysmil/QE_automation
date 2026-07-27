@@ -294,6 +294,72 @@ had turned `check_done`/`diagnose_failure` into internals reachable only
 mid-run, which lost the ability to ask "what happened?" of a case that
 finished hours ago. `qe.sh check <case>_relax.in` now reports every stage.
 
+### 1.9 The hexagonal template pointed at the wrong K (found 2026-07-27)
+
+`template/band.path.hexagonal_example` used **K = (1/3, 1/3, 0)**. That is
+correct only for the γ = 120° hexagonal setting. Every hexagonal cell in this
+project uses γ = 60°:
+
+    a1 = (a, 0, 0)
+    a2 = (a/2, a√3/2, 0)      -> γ = 60°
+
+The two settings are the same lattice but not the same reciprocal basis, so
+the fractional coordinates of K differ. Measured on the graphene test cell
+(a = 2.46 Å, |K| must be 4π/3a = 1.70276):
+
+    (1/3, 1/3, 0)   |k| = 0.98309   <- inside the zone, not K
+    (2/3, 1/3, 0)   |k| = 1.70276   <- K
+    (1/3,-1/3, 0)   |k| = 1.70276   <- K, equivalent
+
+Proof from the band data rather than the geometry. Two bands nearest E_F at
+the point labelled "K", graphene:
+
+    with (1/3,1/3,0)   -6.9769 and 2.5639 eV   -> 9.54 eV apart
+    with (2/3,1/3,0)   -2.3473 and -2.3473 eV  -> degenerate, at E_F exactly
+
+The Dirac point — the one feature of graphene everyone knows — was absent
+from the workflow's own verification band structure, and nothing said so. The
+DOS route is computed on a uniform mesh, so it showed the Dirac point
+correctly all along; that is why the README's cross-check passed while the
+band path was wrong.
+
+**Scope: the template, and the test cases that copied it. Not the research
+data.** `mos2/band/*.nscf.in` and the WS2 runs use
+`(0.125, 0, 0)` and `(1/12, -1/12, 0)` — the γ = 60° K, scaled by 1/4 for the
+4×4 supercell. Those were written by hand and are correct. What was wrong is
+the template the workflow shipped, which is what a new material would have
+been given.
+
+Fixed by `step_init` (§1c): the lattice is measured, the setting is detected
+from γ, and the matching path is written. The template is now two files named
+for their setting — `band.path.hex_gamma60_example` and
+`band.path.hex_gamma120_example` — so a hand-written path is a choice, not a
+coin flip.
+
+### 1c. `qe.sh init` — the band path is derived, not copied
+
+Copying a template was the last step where a user could silently do the wrong
+thing (§1.9). `step_init` reads `CELL_PARAMETERS`, computes a, b, c, α, β, γ,
+classifies the Bravais lattice, and writes `<case>_band.path`.
+
+This is not the "apply one path to everything" bug of README §3 returning:
+
+- the lattice is **measured**, not assumed;
+- the classification and the numbers behind it are **printed**, so a wrong
+  guess is visible before anything runs;
+- a cell that does not classify is **refused**, with instructions to write the
+  path by hand — never given a default;
+- an existing `<case>_band.path` is never overwritten, so a hand-written path
+  wins.
+
+Recognised: hexagonal (γ=60 and γ=120, 2D slab and 3D), simple cubic, FCC,
+BCC, tetragonal, orthorhombic. Tolerances are 1% on lengths and 1° on angles —
+a relaxed cell is never exact. 2D is `c/a > 2`, which drops k_z from the path;
+sampling k_z of a vacuum gap is wasted work.
+
+Adding a lattice: one `case` arm in `band_path_for()` and one branch in the
+awk classifier in `lib/init.sh`.
+
 ## 2. Deliberate, not bugs
 
 - **`CASES_PARALLEL > 1` is experimental and slower here** (45–51 min vs 3 min
@@ -303,7 +369,7 @@ finished hours ago. `qe.sh check <case>_relax.in` now reports every stage.
   pool layout of the run that produced the wavefunctions. `dos.x` gets none.
 - **`<case>_band.path` is required, never defaulted.** A hexagonal path
   applied to a non-hexagonal cell produces a wrong band structure with no
-  error at all. `template/band.path.hexagonal_example` is a thing to copy, not
+  error at all. `template/band.path.hex_gamma60_example` is a thing to copy, not
   a fallback.
 - **`ibrav = 0` with an explicit `CELL_PARAMETERS` card is required.** An
   `ibrav /= 0` input has no cell block to extract; `step_extract()` now says

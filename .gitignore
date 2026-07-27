@@ -6,3 +6,7 @@ logs/
 runlogs/
 slurm-*.out
 *.bak_*
+
+# editor leftovers
+*.swp
+*~

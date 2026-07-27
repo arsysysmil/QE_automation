@@ -456,8 +456,11 @@ An old input once pointed `pseudo_dir` at that account by mistake and every
 stage aborted with `file ... not found`; if a run dies that way, check
 `pseudo_dir` before anything else.
 
-(The exact paths and account names are deliberately not written here — this
-file is published. They are in the private copy on the cluster.)
+The exact account and folder names are deliberately not written here: this
+file is published, and they belong to other people. They are recorded in the
+project log on the cluster, and in nothing that gets pushed. **Do not add them
+back** — this file has one version, identical on the laptop, the cluster and
+GitHub, precisely so there is no "private copy" to drift out of sync.
 
 ---
 

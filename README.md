@@ -91,10 +91,11 @@ Adding a stage is two edits: write `step_<name>()` in the `lib/` file it
 belongs to, then add `<name>` to `PIPELINE_STEPS` in `qe.sh` where it runs. The
 step counters (`3/11`) come from that list, so nothing needs renumbering.
 
-Three documents, three audiences. This file says what the workflow *does*.
-`SETUP.md` says what an input must satisfy to be accepted — read it before
-your first run. `MAINTENANCE.md` says what state the code is in and which bugs
-are already fixed — read it before editing `qe.sh`.
+Three documents, three audiences. **`SETUP.md` is the one to start with** — a
+numbered walkthrough from an empty folder to a finished band structure and
+DOS. This file explains what the workflow does and why it is built this way.
+`MAINTENANCE.md` records what state the code is in and which bugs are already
+fixed — read it before editing `qe.sh`.
 
 Per case, next to the input file:
 

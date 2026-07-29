@@ -157,6 +157,38 @@ DOS_DELTAE="0.01"
 # <case>_band.path next to the input file.
 BAND_POINTS=40
 
+##########
+# Plots
+##########
+#
+# The plot step reads only the finished data files, so it needs no MPI and can
+# be re-run on an old case, or on a laptop against data copied down from the
+# cluster:
+#
+#     bash qe.sh plot cases/mos2/mos2_relax.in
+#
+# It writes <case>_plot.py (or .gnu) next to the data and then runs it. That
+# script is meant to be edited - colours, ranges, figure size - and re-run on
+# its own without going through qe.sh.
+
+# auto    = matplotlib if python3 has it, else gnuplot, else skip
+# python  = force matplotlib
+# gnuplot = force gnuplot
+# none    = produce the data only, no figures and no message about it
+#
+# Compute nodes often have gnuplot but no matplotlib, while the reverse is
+# usual on a laptop - which is why the default resolves per machine rather
+# than naming one engine here.
+PLOT_ENGINE="auto"
+
+# Energy window, in eV, relative to E_Fermi. Wide enough to show the gap and
+# the bands either side of it for a typical semiconductor; narrow it to zoom.
+PLOT_EMIN=-5.0
+PLOT_EMAX=5.0
+
+PLOT_DPI=300
+PLOT_FORMAT="png"
+
 #############################
 # Derived - not meant to be edited below this line
 #############################

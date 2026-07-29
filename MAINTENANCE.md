@@ -276,6 +276,8 @@ back is only the browsability: ~80-390 lines per file, one concern each.
     lib/structure.sh   pulling the relaxed geometry out of the relax output
     lib/generate.sh    writing the scf / band / nscf inputs
     lib/run.sh         the steps that launch pw.x, bands.x, dos.x
+    lib/init.sh        lattice classification + band path (§1c)
+    lib/plot.sh        band / DOS figures from the finished data (§1.10)
 
 **Adding a stage** (work function, PDOS) is now two edits, not four:
 
@@ -353,12 +355,70 @@ This is not the "apply one path to everything" bug of README §3 returning:
   wins.
 
 Recognised: hexagonal (γ=60 and γ=120, 2D slab and 3D), simple cubic, FCC,
-BCC, tetragonal, orthorhombic. Tolerances are 1% on lengths and 1° on angles —
-a relaxed cell is never exact. 2D is `c/a > 2`, which drops k_z from the path;
-sampling k_z of a vacuum gap is wasted work.
+BCC, tetragonal, orthorhombic. Tolerances are 0.1% on lengths and 0.5° on
+angles — a relaxed cell is never exact, but 1%/1° was too loose: it classified
+BaTiO3 (a=3.99, b=4.01, c=4.03) as simple cubic. 2D is `c/a > 2`, which drops
+k_z from the path; sampling k_z of a vacuum gap is wasted work.
 
 Adding a lattice: one `case` arm in `band_path_for()` and one branch in the
 awk classifier in `lib/init.sh`.
+
+### 1.10 `qe.sh plot` — figures, added 2026-07-29
+
+`lib/plot.sh` closes the pipeline: `<case>_band.png`, `<case>_dos.png`, and
+the two side by side sharing one energy axis. It is the 12th and last entry in
+`PIPELINE_STEPS`.
+
+Everything it needs is already on disk when it runs, so it launches no MPI and
+can be re-run on a case that finished months ago — including on a laptop
+against a case folder copied down from the cluster:
+
+    <prefix>.bands.dat.gnu   bands.x   blank-line separated blocks, one per band
+    <prefix>.dos             dos.x     3 columns, or 4 when nspin=2
+    <case>_bandsx.out        bands.x   "x coordinate" of each high-symmetry point
+    <case>_band.in           gen-band  the "! G" comments = the tick labels
+    <case>_scf.out           scf       the Fermi energy
+
+Four decisions worth not re-litigating:
+
+1. **It writes a script and runs it, rather than drawing directly.** The
+   `<case>_plot.py` / `.gnu` it leaves behind has a settings block at the top
+   and is meant to be edited and re-run on its own. A figure always needs
+   tuning for a specific paper, and that tuning must not require touching
+   `lib/`. Re-running `qe.sh plot` overwrites the script — noted in `SETUP.md`.
+
+2. **Tick positions come from `bands.x`, labels from `<case>_band.in`.** The
+   path file holds fractional coordinates; the plot's x axis is distance
+   travelled through reciprocal space, and `bands.x` is the only thing that
+   has already done that conversion. The labels come from the `.in` rather
+   than the `.path` because the `.in` is what `bands.x` actually saw — editing
+   the path file after a run would otherwise relabel data it does not
+   describe. When the two counts disagree the ticks are **numbered**, not
+   guessed at; putting a name on the wrong k-point is exactly the failure
+   §1.9 and §1c exist to prevent.
+
+3. **The zero comes from the SCF run, not from the DOS header.** The band run
+   and the NSCF run are both non-self-consistent restarts of that one SCF
+   charge density. Referencing each panel to its own file would put the two
+   panels of the same figure on two slightly different zeros. When
+   `occupations='fixed'` QE prints band edges instead of a Fermi level, and
+   the highest occupied level is used — reported in the step's output, so it
+   is never silent about which it took.
+
+4. **It is fail-soft: it returns success even when it draws nothing.** It is
+   the last step of a pipeline that may have run for hours, and a compute node
+   without matplotlib is not a reason to mark a finished calculation as
+   failed. Every failure is printed in full, so this is non-fatal, not silent.
+   `PLOT_ENGINE="none"` in `config.sh` turns it off quietly.
+
+Verified on the two cases in `cases/`, both engines, figures inspected:
+
+    gra_fix     Dirac cone lands exactly on K at E - E_F = 0, DOS -> 0 there
+    mos2unit    gap and band edges as expected for a monolayer
+
+The 4-column spin-polarised DOS branch was checked against a synthetic
+`pwscf.dos` (no `nspin=2` case has run through this workflow yet), both
+engines: up plotted positive, down negative, axis symmetric.
 
 ## 2. Deliberate, not bugs
 
@@ -394,10 +454,17 @@ awk classifier in `lib/init.sh`.
    half-written `work/` that the next run reuses. Until this is fixed, clear
    it by hand before re-running a case that was interrupted:
    `rm -rf <case_dir>/{work,cache,logs}`.
-3. **PDOS, work function and plotting are not implemented.** README calls them
-   "planned"; `projwfc.x`/`pp.x`/`average.x` are declared in `config.sh` but
-   never invoked. Work function is currently done outside this workflow by
-   `../mos2/work_function/run_workfunction.sh`.
+3. **PDOS and work function are not implemented.** `projwfc.x`/`pp.x`/
+   `average.x` are declared in `config.sh` but never invoked. Work function is
+   currently done outside this workflow by
+   `../mos2/work_function/run_workfunction.sh`. (Plotting is done — §1.10.)
+5. **`bands.x` only ever writes spin-up bands.** `step_bandsx` does not set
+   `spin_component`, and its default is 1. For an `nspin=2` case the band
+   figure is therefore spin-up only, with nothing saying so — the DOS panel of
+   the same figure *does* show both channels, because `dos.x` writes both
+   without being asked. Fix is to run `bands.x` twice with
+   `spin_component=1,2` into two `filband` names and have `lib/plot.sh` draw
+   both. Not hit yet: no `nspin=2` case has gone through this workflow.
 4. **The graphene case has no `gra_band.path`.** README's "Verified" section
    describes a full 11-step graphene run, but `../graphene/` holds only
    `gra_relax.in`, so re-running it stops at step 6 until a path file is
@@ -545,6 +612,15 @@ GitHub, precisely so there is no "private copy" to drift out of sync.
 | 2026-07-27 | `lib/generate.sh` | `5c9b3e9e91b663544b45f9e3edfcf317` | modular layout (§1b) |
 | 2026-07-27 | `lib/run.sh` | `e9e1a9ebbedf029434b549212b5bac76` | modular layout (§1b) |
 | 2026-07-27 | `config.sh` | `fa06568692f8ca91d82c8a5c2d955f3f` | §1.6; previous kept as `config.sh.bak_20260727` |
+| 2026-07-29 | `qe.sh` | `414cd5d5971cbc64a6a18648e064b120` | `init` (§1c) and `plot` (§1.10) registered |
+| 2026-07-29 | `config.sh` | `e1258c883ea273d58f35cf927dba9ea9` | + `PLOT_ENGINE` / `PLOT_EMIN` / `PLOT_EMAX` / `PLOT_DPI` / `PLOT_FORMAT` |
+| 2026-07-29 | `lib/parser.sh` | `7d71b7e3d4031144ae094e680bf3440f` | §1.4, §1.5, §1.7; `dump` self-parses |
+| 2026-07-29 | `lib/generate.sh` | `24593dbbda2328c03fcffe8d7d4e010f` | passthrough + extra cards |
+| 2026-07-29 | `lib/init.sh` | `21b8c91137bc01c95db9dcf7f3491fd5` | §1c, lattice classification |
+| 2026-07-29 | `lib/plot.sh` | `bbe02adb1150f0fd79d174a4fbb43ea1` | §1.10, new |
+
+`lib/common.sh`, `lib/run.sh` and `lib/structure.sh` are unchanged since
+2026-07-27.
 
 **`qe.sh`, `config.sh` and every `lib/` file must be byte-identical on the
 cluster, the laptop and GitHub** — only `MAINTENANCE.md` differs, and only in

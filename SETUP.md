@@ -154,6 +154,8 @@ Band  →  bands.x
 NSCF
    ↓
 DOS
+   ↓
+Plot
 ```
 
 Beberapa material sekaligus dalam satu job:
@@ -173,17 +175,76 @@ cases/mos2/
 
 pwscf.bands.dat.gnu     data band structure
 pwscf.dos               data DOS (baris pertama memuat E_Fermi)
+
+mos2_band.png           gambar band structure
+mos2_dos.png            gambar DOS
+mos2_band_dos.png       keduanya berdampingan, satu sumbu energi
+mos2_plot.py            script yang menggambar ketiganya
 ```
 
 Log ditutup dengan `Workflow Finished Successfully`.
 
-> Saat memplot, geser energi terhadap E_Fermi. Tapi **jangan membandingkan
-> E_Fermi absolut antar mesin atau antar versi QE** — untuk sistem bergap
-> nilai itu tidak tertentukan secara unik. Selaraskan pada tepi pita.
+Semua gambar diukur dari E_Fermi, jadi angka 0 pada sumbu tegak berarti tepat
+di E_Fermi (garis putus-putus merah).
+
+> **Jangan membandingkan E_Fermi absolut antar mesin atau antar versi QE** —
+> untuk sistem bergap nilai itu tidak tertentukan secara unik. Selaraskan pada
+> tepi pita.
 
 ---
 
-## 8. Jika Terjadi Error
+## 8. Mengubah Tampilan Gambar
+
+Gambar digambar oleh `mos2_plot.py` yang ada di folder case itu sendiri. Buka
+file tersebut; di bagian atas ada blok pengaturan:
+
+```python
+# ------------------------------- settings --------------------------------
+E_FERMI    = 2.1391
+EMIN, EMAX = -5.0, 5.0          # jendela energi, eV, relatif E_Fermi
+TICKS      = [0.0, 0.5774, 1.0865, 1.4714]
+LABELS     = ["G", "M", "K", "G"]
+BAND_COLOR = "#1f4e79"
+DPI        = 300
+# -------------------------------------------------------------------------
+```
+
+Ubah seperlunya lalu jalankan sendiri, tanpa lewat `qe.sh`:
+
+```bash
+cd cases/mos2
+python3 mos2_plot.py
+```
+
+Untuk menggambar ulang tanpa menjalankan perhitungan apa pun (misalnya setelah
+menyalin folder case dari cluster ke laptop):
+
+```bash
+bash qe.sh plot cases/mos2/mos2_relax.in
+```
+
+Perintah ini menulis ulang `mos2_plot.py`, jadi simpan salinan dengan nama lain
+kalau kamu sudah menyetelnya.
+
+Pilihan mesin gambar ada di `config.sh`:
+
+```bash
+PLOT_ENGINE="auto"    # auto | python | gnuplot | none
+PLOT_EMIN=-5.0
+PLOT_EMAX=5.0
+```
+
+`auto` memakai matplotlib kalau ada, kalau tidak gnuplot. Node cluster sering
+punya gnuplot tapi tidak punya matplotlib, dan sebaliknya di laptop — hasil
+keduanya sama.
+
+Kalau tidak ada satu pun, perhitungan **tetap dinyatakan berhasil**; hanya
+gambarnya yang tidak dibuat. Data mentahnya sudah ada, tinggal digambar di
+mesin lain.
+
+---
+
+## 9. Jika Terjadi Error
 
 ```bash
 bash qe.sh check cases/mos2/mos2_relax.in

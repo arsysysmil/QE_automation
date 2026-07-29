@@ -12,9 +12,10 @@ which is what v1 got wrong, not the fact that it had several files.
 
 ## Workflow
 
-    Relax -> SCF -> Bands -> DOS         (implemented)
-    PDOS -> Work Function -> Plotting    (planned; projwfc.x / pp.x / average.x
-                                          are declared in config.sh for these)
+    Relax -> SCF -> Bands -> DOS -> Plot   (implemented)
+    PDOS -> Work Function                  (planned; projwfc.x / pp.x /
+                                            average.x are declared in
+                                            config.sh for these)
 
 ## Usage
 
@@ -74,6 +75,29 @@ card, ... — is carried into the generated scf/band/nscf inputs automatically.
 `SETUP.md` is the full checklist, including the material types this has been
 checked against and the two that are rejected on purpose.
 
+### Plots
+
+The `plot` step closes the pipeline: `<case>_band.png`, `<case>_dos.png`, and
+the two side by side sharing one energy axis. Everything is measured from the
+Fermi energy of the SCF run, so 0 on the y axis is E_F.
+
+It reads only finished data files — no wavefunctions, no MPI — so it can be
+re-run on an old case at any time, including on a laptop against data copied
+down from the cluster:
+
+    bash qe.sh plot cases/mos2/mos2_relax.in
+
+`PLOT_ENGINE` in `config.sh` selects matplotlib or gnuplot; `auto` takes
+whichever the machine has. Both produce the same figures. Rather than drawing
+directly, the step writes `<case>_plot.py` (or `.gnu`) next to the data and
+runs that — so tuning a figure is editing a normal script with a settings
+block at the top and re-running it on its own, without going through `qe.sh`.
+
+This step is deliberately **fail-soft**. It is the last step of a pipeline that
+may have run for hours, and a compute node without matplotlib is not a reason
+to mark a finished calculation as failed. It says what went wrong and returns
+success; the data files are the deliverable.
+
 ## Files
 
     qe.sh                              orchestrator + the step registry
@@ -84,6 +108,7 @@ checked against and the two that are rejected on purpose.
     lib/generate.sh                    writing the scf / band / nscf inputs
     lib/run.sh                         steps that launch pw.x / bands.x / dos.x
     lib/init.sh                        lattice detection + band path
+    lib/plot.sh                        band / DOS figures from the finished data
     SETUP.md                           what an input must satisfy to be accepted
     MAINTENANCE.md                     what is fixed, deliberate, and still open
     template/
@@ -105,6 +130,12 @@ Per case, next to the input file:
     <case>_band.path                   REQUIRED for the band step (see below)
     cache/parser.cache                 parsed input values
     cache/structure.in                 relaxed geometry
+    <prefix>.bands.dat.gnu             band data      (bands.x)
+    <prefix>.dos                       DOS data       (dos.x)
+    <case>_band.png                    figures        (plot)
+    <case>_dos.png
+    <case>_band_dos.png
+    <case>_plot.py  or  _plot.gnu      the script that drew them - yours to edit
 
 ## What changed from QE_workflow
 

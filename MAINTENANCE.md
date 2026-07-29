@@ -354,8 +354,14 @@ This is not the "apply one path to everything" bug of README §3 returning:
 - an existing `<case>_band.path` is never overwritten, so a hand-written path
   wins.
 
-Recognised: hexagonal (γ=60 and γ=120, 2D slab and 3D), simple cubic, FCC,
-BCC, tetragonal, orthorhombic. Tolerances are 0.1% on lengths and 0.5° on
+Recognised: hexagonal (γ=60 and γ=120), simple cubic, FCC, BCC, tetragonal,
+orthorhombic — the last two and hexagonal each in a 3D and a 2D-slab variant.
+
+The `orc_2d` / `tet_2d` variants were added 2026-07-29, when phosphorene from
+the CMPT Tohoku tutorial (orthorhombic, c/a = 7, i.e. 23 Å of vacuum) came out
+as plain `orc` and got a path that spent four of its nine segments walking k_z
+through that vacuum. The `c/a > 2` slab test already existed for hexagonal;
+it simply had not been applied to the other two right-angled classes. Tolerances are 0.1% on lengths and 0.5° on
 angles — a relaxed cell is never exact, but 1%/1° was too loose: it classified
 BaTiO3 (a=3.99, b=4.01, c=4.03) as simple cubic. 2D is `c/a > 2`, which drops
 k_z from the path; sampling k_z of a vacuum gap is wasted work.
@@ -616,7 +622,7 @@ GitHub, precisely so there is no "private copy" to drift out of sync.
 | 2026-07-29 | `config.sh` | `e1258c883ea273d58f35cf927dba9ea9` | + `PLOT_ENGINE` / `PLOT_EMIN` / `PLOT_EMAX` / `PLOT_DPI` / `PLOT_FORMAT` |
 | 2026-07-29 | `lib/parser.sh` | `7d71b7e3d4031144ae094e680bf3440f` | §1.4, §1.5, §1.7; `dump` self-parses |
 | 2026-07-29 | `lib/generate.sh` | `24593dbbda2328c03fcffe8d7d4e010f` | passthrough + extra cards |
-| 2026-07-29 | `lib/init.sh` | `21b8c91137bc01c95db9dcf7f3491fd5` | §1c, lattice classification |
+| 2026-07-29 | `lib/init.sh` | `f5f807d05a9fb1e794ef2e3c5441ce40` | §1c, lattice classification + `orc_2d`/`tet_2d` |
 | 2026-07-29 | `lib/plot.sh` | `bbe02adb1150f0fd79d174a4fbb43ea1` | §1.10, new |
 
 `lib/common.sh`, `lib/run.sh` and `lib/structure.sh` are unchanged since

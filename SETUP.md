@@ -93,8 +93,10 @@ diteruskan. Kalau kisimu tidak dikenali, `init` menolak menebak dan menyuruh
 kamu menulis sendiri — itu disengaja, karena jalur yang salah menghasilkan
 band structure yang terlihat wajar tanpa error apa pun.
 
-Kisi yang dikenali: heksagonal (setting γ=60 dan γ=120, 2D maupun 3D), kubik
-sederhana, FCC, BCC, tetragonal, ortorombik.
+Kisi yang dikenali: heksagonal (setting γ=60 dan γ=120), kubik sederhana, FCC,
+BCC, tetragonal, ortorombik. Heksagonal, tetragonal dan ortorombik masing-masing
+punya varian 3D dan varian slab 2D — dipilih otomatis dari `c/a > 2`, sehingga
+jalur untuk slab tidak menyusuri arah vakum.
 
 > **Kenapa tidak menyalin template saja?** Karena titik K berbeda antara
 > setting γ=60° dan γ=120°: (2/3,1/3,0) versus (1/3,1/3,0). Keduanya

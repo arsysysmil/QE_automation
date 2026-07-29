@@ -71,9 +71,13 @@ classify_lattice() {
         } else if (ab && bc && near(al, 109.4712, 0.5) && near(be, 109.4712, 0.5) && near(ga, 109.4712, 0.5)) {
             type = "bcc"
         } else if (ab && !bc && a90 && b90 && g90) {
-            type = "tet"
+            type = (c / a > 2.0) ? "tet_2d" : "tet"
         } else if (!ab && !bc && !ac && a90 && b90 && g90) {
-            type = "orc"
+            # Same slab test as the hexagonal branch above. Phosphorene is the
+            # case that showed this was missing: orthorhombic with c/a = 7,
+            # i.e. 23 A of vacuum, and the 3D path spent four of its nine
+            # segments walking k_z through that vacuum.
+            type = (c / a > 2.0) ? "orc_2d" : "orc"
         }
 
         printf "%s %.6f %.6f %.6f %.4f %.4f %.4f\n", type, a, b, c, al, be, ga
@@ -165,6 +169,21 @@ PATH
 0.0000000000  0.0000000000  0.5000000000   1                ! Z
 PATH
         ;;
+        orc_2d) cat <<'PATH'
+0.0000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! G
+0.5000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! X
+0.5000000000  0.5000000000  0.0000000000  __BAND_POINTS__   ! S
+0.0000000000  0.5000000000  0.0000000000  __BAND_POINTS__   ! Y
+0.0000000000  0.0000000000  0.0000000000   1                ! G
+PATH
+        ;;
+        tet_2d) cat <<'PATH'
+0.0000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! G
+0.0000000000  0.5000000000  0.0000000000  __BAND_POINTS__   ! X
+0.5000000000  0.5000000000  0.0000000000  __BAND_POINTS__   ! M
+0.0000000000  0.0000000000  0.0000000000   1                ! G
+PATH
+        ;;
         orc) cat <<'PATH'
 0.0000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! G
 0.5000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! X
@@ -191,8 +210,10 @@ lattice_description() {
         cub)   echo "simple cubic" ;;
         fcc)   echo "face-centred cubic" ;;
         bcc)   echo "body-centred cubic" ;;
-        tet)   echo "tetragonal" ;;
-        orc)   echo "orthorhombic" ;;
+        tet)    echo "tetragonal" ;;
+        tet_2d) echo "tetragonal slab    (2D: path stays at k_z = 0)" ;;
+        orc)    echo "orthorhombic" ;;
+        orc_2d) echo "orthorhombic slab  (2D: path stays at k_z = 0)" ;;
         *)     echo "unclassified" ;;
     esac
 }

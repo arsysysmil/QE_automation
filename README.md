@@ -328,3 +328,25 @@ constant claim did not, and has been dropped.
 
 Those directories are workflow tests, not publishable physics - the cutoffs
 were picked to exercise the pipeline, not converged.
+
+### Against an external reference (2026-07-29)
+
+Two materials from the CMPT Tohoku QE tutorial, chosen because neither was
+written for this workflow - both use `ibrav != 0` with `celldm`, and both start
+from `scf` rather than `relax`, so each had to be converted first. Cutoffs and
+meshes were reduced to keep them quick on a laptop, so the numbers are close
+to but not exactly the tutorial's.
+
+    silicon        FCC, converted from ibrav=2, spin-orbit dropped
+                   indirect gap 0.573 eV, CBM ~0.85 of the way G->X,
+                   valence bandwidth 11.97 eV
+    phosphorene    orthorhombic slab, converted from ibrav=8
+                   direct gap 0.646 eV at G
+
+Both band structures reproduce the shape of the tutorial's published figures
+along the same paths. PBE underestimating silicon's gap (0.57 vs 1.17 eV
+experimental) is the functional behaving normally, not a workflow error.
+
+Phosphorene is what showed `init` had no 2D variant for orthorhombic: at
+c/a = 7 it was handed the 3D path, four of whose nine segments run along the
+vacuum direction. `orc_2d` and `tet_2d` were added in response.

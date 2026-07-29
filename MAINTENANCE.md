@@ -5,7 +5,7 @@
 deliberate, and which are still open. `README.md` next to this file describes
 what the workflow *does*; this file describes the state it is in.
 
-Last entry: **2026-07-27**. Running `qe.sh` version: see `md5sum qe.sh` against
+Last entry: **2026-07-29**. Running `qe.sh` version: see `md5sum qe.sh` against
 the table at the bottom.
 
 ---
@@ -403,13 +403,11 @@ Four decisions worth not re-litigating:
    guessed at; putting a name on the wrong k-point is exactly the failure
    §1.9 and §1c exist to prevent.
 
-3. **The zero comes from the SCF run, not from the DOS header.** The band run
-   and the NSCF run are both non-self-consistent restarts of that one SCF
-   charge density. Referencing each panel to its own file would put the two
-   panels of the same figure on two slightly different zeros. When
-   `occupations='fixed'` QE prints band edges instead of a Fermi level, and
-   the highest occupied level is used — reported in the step's output, so it
-   is never silent about which it took.
+3. **The zero comes from the NSCF run** — see §1.11, which is the correction
+   to what this point originally said. When `occupations='fixed'` QE prints
+   band edges instead of a Fermi level, and the highest occupied level is
+   used. Whichever source was taken is named in the step's output, so it is
+   never silent about which it took.
 
 4. **It is fail-soft: it returns success even when it draws nothing.** It is
    the last step of a pipeline that may have run for hours, and a compute node
@@ -425,6 +423,48 @@ Verified on the two cases in `cases/`, both engines, figures inspected:
 The 4-column spin-polarised DOS branch was checked against a synthetic
 `pwscf.dos` (no `nspin=2` case has run through this workflow yet), both
 engines: up plotted positive, down negative, axis symmetric.
+
+### 1.11 The plot zero came from the wrong run (fixed 2026-07-29)
+
+`plot_fermi_energy()` read the Fermi level from the **SCF** output. §1.10
+point 3 above justified that: the band run and the NSCF run are both
+non-self-consistent restarts of one SCF charge density, so the SCF looked
+like "the" common reference.
+
+That conflated two different quantities. The eigenvalues do all come from the
+same charge density — but the Fermi level is not read off the density. It is
+found by integrating occupations over the k-point mesh, and the SCF mesh is
+not the NSCF mesh. `NSCF_KPOINT_SCALE=2` means the NSCF mesh is deliberately
+the denser of the two, so its E_F is the better estimate. It is also the value
+`dos.x` writes into the DOS header, so the old order had the band panel on one
+zero and the DOS data on another.
+
+On a semiconductor the coarse SCF E_F can land **outside the gap**, which puts
+the zero line through a band instead of between them:
+
+    phosphorene   VBM -2.1345   CBM -1.4888   (gap 0.646 eV)
+      E_F scf  (6x6x1)    -2.2887   below the VBM  -> band top stuck out
+                                                      ABOVE the zero line
+      E_F nscf (12x12x1)  -2.0755   inside the gap
+
+    silicon       VBM  6.2102   CBM  6.7831   (gap 0.573 eV)
+      E_F scf  (6x6x6)     6.7922   just above the CBM
+      E_F nscf (12x12x12)  6.7489   inside the gap
+
+Silicon had the same fault first, in the other direction and only 43 meV, so
+nobody caught it. Phosphorene's 213 meV made it visible: the valence band
+poked above the dashed line, which is what a reader notices.
+
+Order is now nscf output -> DOS header -> scf output, and falling through to
+the SCF prints a warning saying why. Found by a reader of the phosphorene
+figure, not by the workflow — worth remembering that nothing here checks that
+E_F lands in a gap, because doing so needs an electron count the plot step
+does not have.
+
+For a gapped material the robust reference is the **VBM**, not E_F at all:
+E_F under smearing sits wherever the occupation integral puts it, which is
+near a band edge rather than mid-gap. Setting `E_FERMI` to the VBM in the
+generated plot script is the right move for a figure meant for publication.
 
 ## 2. Deliberate, not bugs
 
@@ -623,7 +663,7 @@ GitHub, precisely so there is no "private copy" to drift out of sync.
 | 2026-07-29 | `lib/parser.sh` | `7d71b7e3d4031144ae094e680bf3440f` | §1.4, §1.5, §1.7; `dump` self-parses |
 | 2026-07-29 | `lib/generate.sh` | `24593dbbda2328c03fcffe8d7d4e010f` | passthrough + extra cards |
 | 2026-07-29 | `lib/init.sh` | `f5f807d05a9fb1e794ef2e3c5441ce40` | §1c, lattice classification + `orc_2d`/`tet_2d` |
-| 2026-07-29 | `lib/plot.sh` | `bbe02adb1150f0fd79d174a4fbb43ea1` | §1.10, new |
+| 2026-07-29 | `lib/plot.sh` | `b5769335c90615e588606e91de2924ee` | §1.10 + §1.11 (E_F now from the nscf) |
 
 `lib/common.sh`, `lib/run.sh` and `lib/structure.sh` are unchanged since
 2026-07-27.

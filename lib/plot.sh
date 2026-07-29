@@ -54,49 +54,89 @@ plot_pick_engine() {
     fi
 }
 
+# Pull a Fermi level (or, for occupations='fixed', the band edge QE reports
+# instead) out of one pw.x output. Prints nothing and fails if neither is there.
+plot_fermi_from_out() {
+    local out="$1" line
+
+    [[ -f "$out" ]] || return 1
+
+    line="$(grep -E 'the Fermi energy is' "$out" | tail -1 || true)"
+    if [[ -n "$line" ]]; then
+        awk '{print $(NF-1)}' <<<"$line"
+        return 0
+    fi
+
+    # occupations='fixed': QE reports band edges instead of a Fermi level.
+    # The valence band maximum is the conventional zero for these.
+    line="$(grep -E 'highest occupied' "$out" | tail -1 || true)"
+    if [[ -n "$line" ]]; then
+        if [[ "$line" == *"lowest unoccupied"* ]]; then
+            awk '{print $(NF-1)}' <<<"$line"
+        else
+            awk '{print $NF}' <<<"$line"
+        fi
+        return 0
+    fi
+
+    return 1
+}
+
 # The energy every plot is measured from.
 #
-# Taken from the SCF run, not from the DOS header, because the band run and the
-# NSCF run are both non-self-consistent restarts of that one SCF charge density.
-# Referencing each panel to its own file would put the band panel and the DOS
-# panel on two slightly different zeros in the same figure.
+# Taken from the NSCF run, NOT the SCF run.
+#
+# This used to read the SCF, on the reasoning that the band run and the NSCF
+# run are both non-self-consistent restarts of that one SCF charge density, so
+# the SCF was "the" common reference. That conflated two different things. The
+# eigenvalues do all come from the same charge density - but the Fermi level is
+# not read off the density, it is found by integrating occupations over the
+# k-point mesh, and the SCF mesh and the NSCF mesh are not the same mesh. A
+# coarse SCF mesh gives a poor E_F.
+#
+# Measured on phosphorene, where the error is large enough to see:
+#
+#     VBM -2.1345    CBM -1.4888   (gap 0.646 eV)
+#     E_F from scf  (6x6x1)   -2.2887   BELOW the VBM - impossible for a
+#                                       semiconductor, and it put the zero
+#                                       line under the valence band so the
+#                                       band top stuck out above it
+#     E_F from nscf (12x12x1) -2.0755   inside the gap, correct
+#
+# Silicon has the same fault in the other direction (scf 6.7922 sits just
+# above its CBM at 6.7831; nscf gives 6.7489, inside the gap) - small enough
+# that nobody noticed until phosphorene made it obvious.
+#
+# The NSCF value is also the one dos.x writes into the DOS header, so this
+# keeps the band panel and the DOS panel on the same zero as the DOS data
+# itself, which the old order did not.
 plot_fermi_energy() {
-    local line
+    local ef line
 
     PLOT_EF=""
     PLOT_EF_SOURCE=""
 
-    if [[ -f "$SCF_OUT" ]]; then
-        line="$(grep -E 'the Fermi energy is' "$SCF_OUT" | tail -1 || true)"
-        if [[ -n "$line" ]]; then
-            PLOT_EF="$(awk '{print $(NF-1)}' <<<"$line")"
-            PLOT_EF_SOURCE="scf output, Fermi energy"
-            return 0
-        fi
-
-        # occupations='fixed': QE reports band edges instead of a Fermi level.
-        # The valence band maximum is the conventional zero for these.
-        line="$(grep -E 'highest occupied' "$SCF_OUT" | tail -1 || true)"
-        if [[ -n "$line" ]]; then
-            if [[ "$line" == *"lowest unoccupied"* ]]; then
-                PLOT_EF="$(awk '{print $(NF-1)}' <<<"$line")"
-                PLOT_EF_SOURCE="scf output, highest occupied level (this system has a gap)"
-            else
-                PLOT_EF="$(awk '{print $NF}' <<<"$line")"
-                PLOT_EF_SOURCE="scf output, highest occupied level"
-            fi
-            return 0
-        fi
+    if ef="$(plot_fermi_from_out "$NSCF_OUT")"; then
+        PLOT_EF="$ef"
+        PLOT_EF_SOURCE="nscf output - the densest mesh, and what dos.x used"
+        return 0
     fi
 
-    # Last resort. dos.x writes its own EFermi into the header.
+    # dos.x copies the NSCF Fermi level into its header, so this is the same
+    # number by another route - useful when only the data files were kept.
     if [[ -f "$PLOT_DOS_FILE" ]]; then
         line="$(head -1 "$PLOT_DOS_FILE")"
         if [[ "$line" == *EFermi* ]]; then
             PLOT_EF="$(awk '{for(i=1;i<=NF;i++) if($i=="EFermi") print $(i+2)}' <<<"$line")"
-            PLOT_EF_SOURCE="dos file header"
+            PLOT_EF_SOURCE="dos file header (same value the nscf produced)"
             return 0
         fi
+    fi
+
+    if ef="$(plot_fermi_from_out "$SCF_OUT")"; then
+        PLOT_EF="$ef"
+        PLOT_EF_SOURCE="scf output - COARSE MESH FALLBACK, see the warning below"
+        return 0
     fi
 
     PLOT_EF="0.0"
@@ -583,10 +623,16 @@ step_plot() {
         echo "              the band x axis will be unlabelled"
     fi
     if [[ "$PLOT_EF_SOURCE" == NOT* ]]; then
-        echo "  warning: no Fermi energy found in $(basename "$SCF_OUT") - the plots"
-        echo "           are drawn against the raw eigenvalue scale, so the dashed"
-        echo "           line at 0 is meaningless. Edit E_FERMI in the generated"
-        echo "           script and re-run it."
+        echo "  warning: no Fermi energy found in $(basename "$NSCF_OUT") or"
+        echo "           $(basename "$SCF_OUT") - the plots are drawn against the raw"
+        echo "           eigenvalue scale, so the dashed line at 0 is meaningless."
+        echo "           Edit E_FERMI in the generated script and re-run it."
+    elif [[ "$PLOT_EF_SOURCE" == scf* ]]; then
+        echo "  warning: falling back to the SCF Fermi energy because"
+        echo "           $(basename "$NSCF_OUT") is missing. The SCF mesh is coarser than"
+        echo "           the NSCF one, and on a semiconductor its E_F can land outside"
+        echo "           the gap - which draws the zero line through a band instead of"
+        echo "           between them. Run the nscf step, then 'qe.sh plot' again."
     fi
 
     local script status=0

@@ -107,7 +107,7 @@ fi
 # different files. Sourcing here keeps one process, one environment, and one
 # config.sh - while the code goes back to being readable one file at a time.
 
-for _lib in common parser structure generate run init plot; do
+for _lib in common parser structure generate run init plot workfunction; do
     if [[ ! -f "$ROOT_DIR/lib/${_lib}.sh" ]]; then
         echo "ERROR: lib/${_lib}.sh not found (looked in '$ROOT_DIR/lib')."
         echo "qe.sh, config.sh and lib/ have to sit in the same directory."
@@ -144,6 +144,7 @@ PIPELINE_STEPS=(
     nscf
     dos
     plot
+    workfunction
 )
 
 # Callable by name, but not part of `all`.
@@ -151,6 +152,7 @@ EXTRA_STEPS=( all dump check init )
 
 # Labels for the run header, where the bare step name reads badly.
 declare -A STEP_LABELS=(
+    [workfunction]="WORK FUNCTION"
     [extract]="EXTRACT STRUCTURE"
     [gen-scf]="GENERATE SCF"
     [gen-band]="GENERATE BAND"
@@ -172,6 +174,7 @@ declare -A STEP_HELP=(
     [nscf]="run pw.x on the nscf input"
     [dos]="run dos.x"
     [plot]="draw the band structure and DOS figures from the data"
+    [workfunction]="slab work function from pp.x + average.x (skipped for bulk)"
     [dump]="print everything the parser read (debugging)"
     [check]="report which of this case's outputs finished, and why not"
     [init]="detect the lattice and write <case>_band.path"

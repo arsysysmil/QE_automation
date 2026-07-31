@@ -466,6 +466,60 @@ E_F under smearing sits wherever the occupation integral puts it, which is
 near a band edge rather than mid-gap. Setting `E_FERMI` to the VBM in the
 generated plot script is the right move for a figure meant for publication.
 
+### 1.12 `qe.sh workfunction` — added 2026-07-30 (branch `workfunction`)
+
+`lib/workfunction.sh`, the 13th and last step.
+
+    Phi = V_vacuum - E_Fermi
+
+`pp.x` with `plot_num = 11` writes the electrostatic potential (bare +
+Hartree) from the charge density the SCF already produced; `average.x` planar-
+averages it along z. No new SCF. Measured on phosphorene, 6 ranks: pp.x 2.7 s,
+average.x 2.2 s — free against a pipeline that runs for minutes to hours.
+
+Verified on phosphorene: vacuum plateau +2.7103 eV with a ripple of 1.1e-4 eV,
+E_F -2.2887 eV, **Phi = 4.999 eV** — matching a hand calculation done
+independently before the step existed.
+
+Four decisions:
+
+1. **E_Fermi comes from the SCF here, not the NSCF — the opposite of
+   §1.11.** Not an oversight. The potential `pp.x` reads is built from the SCF
+   charge density, so the two halves of `V_vac - E_F` come from one
+   calculation. More importantly, the five-gas MoS2 dataset that already
+   exists outside this workflow used the SCF value, and the quantity those
+   runs exist to produce is **ΔWF = WF(gas) − WF(pristine)**, where a
+   consistent reference cancels far more than a better one improves. Changing
+   it would make new numbers incomparable with that dataset. (For phosphorene
+   the two differ by 0.21 eV: 4.999 vs 4.786.)
+
+2. **Bulk is skipped, not approximated.** `c/a > 2`, the same slab test
+   `lib/init.sh` uses. A bulk cell has no vacuum to remove an electron to, so
+   there is no work function; printing a number for one would be worse than
+   printing nothing.
+
+3. **The plateau ripple is reported and warned on.** A flat plateau is the
+   evidence that the vacuum gap is thick enough. Above 1e-3 eV the two
+   surfaces still see each other and the number is not converged in c.
+
+4. **Both sides of the vacuum are compared.** An adsorbate on one face gives
+   the slab a net dipole and two genuinely different vacuum levels. When they
+   differ by more than 0.05 eV the step reports both, and checks whether
+   `dipfield` is actually set — without it the periodic images interact and
+   both numbers are suspect. This is exactly the MoS2-plus-gas case.
+
+**`average.x` needs a non-zero `awin`.** Its last input field is the window
+length for the *macroscopic* average (output column 3). With `0.0` it aborts:
+
+    Error in routine average (1): nmacro is too small
+
+The value is irrelevant to what this step reads — column 2, the planar
+average, is a plain in-plane mean — so `1.0` is passed simply because it is
+valid. The existing MoS2 work-function inputs pass `0.0`, which is why their
+runner script marks `average.x` optional and says not to let it abort the
+pipeline: it had been failing on every system, and the cube-parsing Python
+script was doing the real work.
+
 ## 2. Deliberate, not bugs
 
 - **`CASES_PARALLEL > 1` is experimental and slower here** (45–51 min vs 3 min

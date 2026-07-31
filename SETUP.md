@@ -1,16 +1,14 @@
 # QE_automation — Panduan Penggunaan
 
-## Apa ini
-
 QE_automation menjalankan rantai perhitungan Quantum ESPRESSO secara otomatis.
 Dari **satu file input relax**, sistem ini mengerjakan seluruh tahapan sampai
 selesai:
 
 ```
-relax → scf → band → bands.x → nscf → dos → plot
+relax → scf → band → bands.x → nscf → dos → plot → work function
 ```
 
-Hasil akhirnya: **band structure**, **DOS**, dan gambarnya dalam format PNG.
+Hasil akhir: **band structure**, **DOS**, dan plot format PNG.
 
 Tanpa sistem ini, ketujuh tahap tersebut dijalankan manual satu per satu, dan
 setiap tahap memerlukan file input baru yang ditulis tangan dari hasil tahap
@@ -142,7 +140,7 @@ konduksi, sehingga bagian atas grafik band menjadi kosong. Tulis `nbnd` di
 
 Contoh untuk material bernama `mos2`.
 
-### Laptop
+### Lokal
 
 ```bash
 cd ~/QE_automation
@@ -232,7 +230,7 @@ Tulisan `(none)` berarti tidak ada parameter tambahan, bukan error.
 
 ## `bash qe.sh ...` / `sbatch qe.sh ...`
 
-**Menjalankan seluruh pipeline**, 12 tahap berurutan:
+**Menjalankan seluruh pipeline**, 13 tahap berurutan:
 
 | # | Tahap | Isinya |
 |---|---|---|
@@ -244,6 +242,7 @@ Tulisan `(none)` berarti tidak ada parameter tambahan, bukan error.
 | 9–10 | `gen-nscf`, `nscf` | mesh k lebih rapat untuk DOS |
 | 11 | `dos` | menghasilkan data DOS |
 | 12 | `plot` | menggambar band dan DOS |
+| 13 | `workfunction` | work function slab (dilewati untuk material bulk) |
 
 Setiap tahap mencetak waktu mulai, selesai, dan durasinya. Proses selesai bila
 muncul:
@@ -279,6 +278,40 @@ cases/mos2/
 
 Pada semua gambar, **angka 0 pada sumbu tegak menandai E_Fermi**, ditampilkan
 sebagai garis putus-putus merah.
+
+## Work function
+
+Tahap terakhir menghitung work function untuk material **slab** (berlapis
+dengan vakum). Hasilnya tampil langsung di log:
+
+```
+  vacuum spans z = 1.068 .. 22.125 A  (cell c = 23.193 A)
+  vacuum level   = +2.7103 eV   (ripple 1.1e-04 eV)
+  E_Fermi        = -2.2887 eV   (scf output)
+  WORK FUNCTION  = 4.9990 eV
+```
+
+Rumusnya `Φ = V_vakum − E_Fermi`. Tahap ini hanya membaca ulang rapat muatan
+yang sudah ada, tanpa SCF baru — selesai dalam hitungan detik.
+
+Profil potensial sepanjang sumbu z disimpan di `<material>_potential.dat`
+(kolom: z dalam bohr, V dalam Ry) bila ingin digambar sendiri.
+
+**Dua hal yang perlu diperiksa pada keluarannya:**
+
+**`ripple`** menunjukkan kedataran plateau vakum. Bila melebihi `1e-3 eV`,
+sistem memberi peringatan: biasanya berarti vakumnya terlalu tipis sehingga
+kedua permukaan slab masih saling berinteraksi, dan angkanya belum konvergen
+terhadap `c`.
+
+**Perbedaan kedua sisi vakum.** Slab dengan molekul teradsorpsi hanya di satu
+sisi memiliki dua level vakum berbeda. Bila selisihnya melebihi 0.05 eV,
+sistem menampilkan keduanya dan memeriksa apakah `dipfield` diaktifkan. Tanpa
+`dipfield`, kedua angka tersebut tidak dapat dipercaya — tambahkan
+`tefield`, `dipfield`, `edir`, `emaxpos`, dan `eopreg` pada file input.
+
+Untuk material **bulk**, tahap ini dilewati dengan penjelasan. Bulk tidak
+memiliki vakum, sehingga tidak memiliki work function.
 
 ## Menyetel ulang gambar
 

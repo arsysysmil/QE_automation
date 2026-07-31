@@ -189,6 +189,24 @@ PLOT_EMAX=5.0
 PLOT_DPI=300
 PLOT_FORMAT="png"
 
+##########
+# Work function
+##########
+#
+# Phi = V_vacuum - E_Fermi, for a slab. Runs pp.x then average.x over the
+# charge density the SCF already produced - no new SCF, measured at ~5 s
+# total on 6 ranks. Skipped automatically for a bulk cell (c/a <= 2), which
+# has no vacuum to measure into.
+#
+# Conventions match the MoS2 gas-sensor runs done outside this workflow, so
+# the numbers are comparable: plot_num=11, planar average along z, E_Fermi
+# from the SCF.
+
+# Points average.x samples along the slab normal. Not the FFT grid size - it
+# interpolates - so this only sets how finely V(z) is tabulated. 1000 is
+# plenty to read a plateau off; the MoS2 runs used 288.
+WF_AVG_NPT=1000
+
 #############################
 # Derived - not meant to be edited below this line
 #############################

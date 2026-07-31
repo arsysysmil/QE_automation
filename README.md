@@ -1,4 +1,4 @@
-# QE_automation
+# QE_workflow2 — QE_automation + work function
 
 Author: Arsy Syamil
 
@@ -12,10 +12,12 @@ which is what v1 got wrong, not the fact that it had several files.
 
 ## Workflow
 
-    Relax -> SCF -> Bands -> DOS -> Plot   (implemented)
-    PDOS -> Work Function                  (planned; projwfc.x / pp.x /
-                                            average.x are declared in
-                                            config.sh for these)
+    Relax -> SCF -> Bands -> DOS -> Plot -> Work function   (implemented)
+    PDOS                                                    (planned;
+        projwfc.x is declared in config.sh for it)
+
+This is `QE_automation` plus a 13th step, `workfunction`, on the branch of the
+same name. Everything else is identical to it.
 
 ## Usage
 
@@ -109,6 +111,7 @@ success; the data files are the deliverable.
     lib/run.sh                         steps that launch pw.x / bands.x / dos.x
     lib/init.sh                        lattice detection + band path
     lib/plot.sh                        band / DOS figures from the finished data
+    lib/workfunction.sh                slab work function via pp.x + average.x
     SETUP.md                           what an input must satisfy to be accepted
     MAINTENANCE.md                     what is fixed, deliberate, and still open
     template/

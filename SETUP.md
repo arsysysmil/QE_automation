@@ -1,439 +1,47 @@
-# Cara Pakai QE Workflow
+# QE_automation — Panduan Penggunaan
 
-Dari satu file input relax, workflow ini menjalankan seluruh rantai perhitungan
-sampai jadi **band structure**, **DOS**, dan **gambarnya**.
+## Apa ini
 
-Dokumen ini tiga bagian:
+QE_automation menjalankan rantai perhitungan Quantum ESPRESSO secara otomatis.
+Dari **satu file input relax**, sistem ini mengerjakan seluruh tahapan sampai
+selesai:
 
-1. **Urutan perintah** — ringkas, tinggal salin
-2. **Urutan perintah beserta penjelasan** — apa yang terjadi, apa yang muncul, artinya apa
-3. **Disclaimer** — syarat mutlak yang harus dipenuhi sebelum masuk automasi
+```
+relax → scf → band → bands.x → nscf → dos → plot
+```
 
-**Baca Bagian 3 lebih dulu kalau ini pertama kalinya.** Input yang tidak
-memenuhi syarat di situ akan ditolak, dan lebih cepat memperbaikinya sekarang
-daripada setelah perhitungan jalan.
+Hasil akhirnya: **band structure**, **DOS**, dan gambarnya dalam format PNG.
+
+Tanpa sistem ini, ketujuh tahap tersebut dijalankan manual satu per satu, dan
+setiap tahap memerlukan file input baru yang ditulis tangan dari hasil tahap
+sebelumnya.
+
+Sistem berjalan di laptop maupun di cluster SLURM dengan perintah yang sama.
 
 ---
 
-# BAGIAN 1 — Urutan Perintah
+# 1. Syarat Wajib
 
-Contoh untuk material bernama `mos2`. Ganti `mos2` dengan nama materialmu.
+**Baca bagian ini sebelum menjalankan apa pun.** Input yang tidak memenuhi
+syarat akan ditolak, atau lebih buruk lagi, tetap berjalan tetapi hasilnya
+keliru.
 
-## Di laptop
+## 1.1 Syarat yang diperiksa sistem
 
-```bash
-cd ~/QE_workflow
-mkdir -p cases/mos2
-cp /lokasi/file/mos2_relax.in cases/mos2/
-bash qe.sh init cases/mos2/mos2_relax.in
-bash qe.sh dump cases/mos2/mos2_relax.in
-bash qe.sh      cases/mos2/mos2_relax.in
-```
+Bila salah satu tidak dipenuhi, sistem berhenti seketika dengan pesan yang
+menyebut penyebab dan solusinya. Tidak ada perhitungan yang terlanjur berjalan.
 
-## Di cluster (SLURM)
-
-```bash
-cd _scratch/arsy/QE_workflow_v2
-mkdir -p cases/mos2
-cp /lokasi/file/mos2_relax.in cases/mos2/
-bash   qe.sh init cases/mos2/mos2_relax.in
-bash   qe.sh dump cases/mos2/mos2_relax.in
-sbatch qe.sh      cases/mos2/mos2_relax.in
-squeue -u $USER
-```
-
-Bedanya hanya baris terakhir: `bash` di laptop, `sbatch` di cluster. `init` dan
-`dump` selalu pakai `bash` — keduanya ringan dan tidak butuh antrian.
-
-## Kalau ada yang gagal
-
-```bash
-bash qe.sh check cases/mos2/mos2_relax.in
-rm -rf cases/mos2/{work,cache,logs}
-```
-
-## Menyetel ulang gambar (tanpa hitung ulang)
-
-```bash
-cd cases/mos2
-nano mos2_plot.py
-python3 mos2_plot.py
-```
-
----
-
-# BAGIAN 2 — Urutan Perintah Beserta Penjelasan
-
-## 1. Masuk ke folder workflow
-
-```bash
-cd ~/QE_workflow
-```
-
-Semua perintah dijalankan dari sini, bukan dari dalam folder case. Path input
-selalu ditulis relatif dari sini (`cases/mos2/mos2_relax.in`).
-
-## 2. Buat folder untuk material
-
-```bash
-mkdir -p cases/mos2
-```
-
-**Satu material = satu folder.** Ini wajib, bukan sekadar kerapian: file hasil
-akhir selalu bernama `pwscf.dos` dan `pwscf.bands.dat.gnu` (dari `prefix`
-bawaan QE), jadi dua material dalam satu folder akan saling menimpa hasilnya
-tanpa peringatan apa pun.
-
-## 3. Masukkan file input
-
-```bash
-cp /lokasi/file/mos2_relax.in cases/mos2/
-```
-
-Nama file **harus** berakhiran `_relax.in` dengan garis bawah. `mos2.relax.in`
-akan ditolak. Alasannya ada di Bagian 3.
-
-## 4. Buat jalur band
-
-```bash
-bash qe.sh init cases/mos2/mos2_relax.in
-```
-
-**Apa yang dikerjakan:** membaca `CELL_PARAMETERS` dari inputmu, mengukur
-panjang tiga rusuk dan tiga sudutnya, menyimpulkan jenis kisinya, lalu menulis
-`mos2_band.path` berisi rute titik-titik simetri yang sesuai.
-
-**Kenapa perlu:** band structure adalah grafik energi versus arah dalam
-kristal. Arah itu ruang 3 dimensi, tidak mungkin digambar semua — jadi
-dipilihlah satu rute melewati titik istimewa. Rute ini berbeda untuk tiap
-bentuk kristal, dan **kalau rutenya salah QE tidak akan error sama sekali**.
-Grafiknya tetap keluar dan tetap terlihat wajar, tapi isinya bukan yang kamu
-maksud. Ini pernah terjadi di project ini: label "K" pernah jatuh di titik yang
-salah dan puncak Dirac graphene hilang tanpa satu pun pesan peringatan.
-
-**Yang muncul:**
+### Nama file harus berakhiran `_relax.in`
 
 ```
-Lattice measured from mos2_relax.in:
-  a = 3.1900   b = 3.1900   c = 20.0000
-  alpha = 90.00   beta = 90.00   gamma = 60.00
-  -> hexagonal slab, gamma=60 setting  (2D: path stays at k_z = 0)
-
-Band path written: cases/mos2/mos2_band.path
-  K_POINTS crystal_b
-  4
-  0.0000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! G
-  0.5000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! M
-  0.6666666667  0.3333333333  0.0000000000  __BAND_POINTS__   ! K
-  0.0000000000  0.0000000000  0.0000000000   1                ! G
+BENAR  : mos2_relax.in     si_relax.in
+SALAH  : mos2.relax.in     mos2_relax.txt
 ```
 
-**Cara membacanya:**
+Garis bawah, bukan titik. Nama material diambil dari bagian sebelum
+`_relax.in`, dan semua file turunan dinamai dari situ.
 
-| Bagian | Arti |
-|---|---|
-| `a b c` dan `alpha beta gamma` | hasil pengukuran sel dari inputmu |
-| baris `->` | **kesimpulan jenis kisi — ini yang wajib kamu periksa** |
-| tiga angka tiap baris | koordinat titik simetri (pecahan, relatif kisi resiprok) |
-| `! G`, `! M`, `! K` | nama titik; nanti jadi label sumbu-x di gambar. `G` = Γ |
-| `__BAND_POINTS__` | tempat kosong, nanti diganti `40` (nilai `BAND_POINTS` di `config.sh`) = jumlah titik antara baris ini dan berikutnya |
-| angka `1` di baris terakhir | titik akhir, tidak ada segmen setelahnya |
-| angka `0` (kalau ada) | **lompat** — rute putus di sini lalu menyambung lagi. Ini arti tanda koma pada label seperti `U,K` |
-
-**Yang wajib kamu pastikan — dua hal, dan keduanya butuh matamu:**
-
-1. **Baris `->` cocok dengan materialmu?** Kamu tahu MoS2 itu heksagonal. Kalau
-   tertulis "tetragonal", berarti ada yang salah di `CELL_PARAMETERS`-mu.
-2. **Rutenya memang yang ingin kamu tampilkan?** Ini rute standar untuk kisi
-   tersebut, belum tentu rute yang dipakai paper pembandingmu. Kalau ingin
-   membandingkan berdampingan dengan gambar orang lain, samakan rutenya.
-
-Kisi yang dikenali: heksagonal (setting γ=60 dan γ=120), kubik sederhana, FCC,
-BCC, tetragonal, ortorombik. Heksagonal, tetragonal dan ortorombik
-masing-masing punya varian 3D dan varian slab 2D — dipilih otomatis dari
-`c/a > 2`, sehingga jalur untuk slab tidak menyusuri arah vakum.
-
-Kalau kisimu **tidak dikenali**, `init` menolak menebak dan menyuruhmu menulis
-sendiri. Itu disengaja.
-
-**`init` tidak akan pernah menimpa `band.path` yang sudah ada.** Jadi rute
-tulisan tanganmu selalu menang. Kalau ingin membuat ulang dari nol, hapus dulu
-file `.path`-nya.
-
-## 5. Periksa hasil pembacaan input
-
-```bash
-bash qe.sh dump cases/mos2/mos2_relax.in
-```
-
-**Apa yang dikerjakan:** membaca file inputmu persis seperti yang nanti dibaca
-workflow, lalu menampilkan hasil bacaannya. Gratis, tanpa MPI, beberapa detik.
-
-**Kenapa perlu:** semua salah ketik ketahuan **sekarang**, bukan setelah
-perhitungan jalan berjam-jam.
-
-**Yang muncul:**
-
-```
-  passthrough &CONTROL: tstress tprnfor
-  passthrough &ELECTRONS: mixing_mode
-Parser cache saved:
-/home/arsy54/QE_workflow/cases/mos2/cache/parser.cache
-
-PREFIX        : pwscf
-OUTDIR        : ./work
-PSEUDO_DIR    : /home/arsy54/QE/pseudo
-CALCULATION   : relax
-IBRAV         : 0
-NAT           : 3
-...
-&SYSTEM passthrough:
-  (none)
-cards carried over:
-  (none)
-```
-
-**Cara membacanya:**
-
-**Daftar parameter di tengah** — cocokkan `NAT`, `NTYP`, `ECUTWFC`,
-`K_POINTS`, dan nama file pseudo dengan yang kamu maksud.
-
-**Baris `note: ... using default ...`** — kalau ada, artinya ada parameter yang
-**tidak kamu tulis** dan diisi otomatis oleh workflow. Perhatikan baik-baik.
-Yang paling sering menggigit: `occupations` yang tidak ditulis akan jadi
-`'fixed'`, dan itu **salah untuk logam maupun semimetal** seperti graphene.
-Kalau tidak ada baris `note:` sama sekali, berarti semua parameter datang dari
-inputmu sendiri — itu kondisi terbaik.
-
-**Baris `passthrough`** — parser hanya "mengerti" 16 parameter (yang tampil di
-daftar tengah itu). Parameter di luar 16 itu tidak dibuang, tapi **disalin apa
-adanya** ke tahap scf/band/nscf. Itulah passthrough.
-
-Ini penting karena dulu pernah jadi bug serius: `vdw_corr` dan `nspin` hilang
-diam-diam, sehingga SCF memakai koreksi dispersi tapi band structure tidak —
-fisika berbeda, tanpa satu pun pesan error.
-
-`(none)` artinya **"tidak ada parameter tambahan di namelist itu"**, bukan
-error. Kalau `&SYSTEM` isinya cuma `ibrav`, `nat`, `ntyp`, `ecutwfc`,
-`ecutrho`, `occupations`, `smearing`, `degauss` — semuanya sudah termasuk 16
-yang dikenali, jadi tidak ada sisa untuk disalin.
-
-**Kalau kamu memakai `vdw_corr`, `nspin`, atau `nbnd`, namanya WAJIB muncul di
-baris `&SYSTEM passthrough`.** Kalau tidak muncul, parameter itu tidak akan
-sampai ke tahap berikutnya.
-
-**`cards carried over`** — card `HUBBARD` (DFT+U) dan `OCCUPATIONS` kalau ada.
-
-## 6. Jalankan pipeline
-
-### Laptop
-
-```bash
-bash qe.sh cases/mos2/mos2_relax.in
-```
-
-### Cluster
-
-```bash
-sbatch qe.sh cases/mos2/mos2_relax.in
-squeue -u $USER
-```
-
-Beberapa material sekaligus dalam satu job:
-
-```bash
-sbatch qe.sh cases/mos2/mos2_relax.in cases/ws2/ws2_relax.in
-```
-
-Keduanya jalan bergantian, masing-masing mendapat seluruh alokasi. Satu case
-yang gagal tidak menghentikan yang lain.
-
-**Apa yang dikerjakan — 12 tahap berurutan:**
-
-| # | Tahap | Isinya |
-|---|---|---|
-| 1 | `parser` | baca input, tulis `cache/parser.cache` |
-| 2 | `relax` | `pw.x` — optimasi struktur |
-| 3 | `extract` | ambil geometri hasil relaksasi dari output |
-| 4 | `gen-scf` | tulis `mos2_scf.in` |
-| 5 | `scf` | `pw.x` — hitung rapat muatan |
-| 6 | `gen-band` | tulis `mos2_band.in` (pakai `mos2_band.path`) |
-| 7 | `band` | `pw.x` — energi sepanjang rute |
-| 8 | `bandsx` | `bands.x` — susun jadi `pwscf.bands.dat.gnu` |
-| 9 | `gen-nscf` | tulis `mos2_nscf.in`, mesh k lebih rapat |
-| 10 | `nscf` | `pw.x` — untuk DOS |
-| 11 | `dos` | `dos.x` — hasilkan `pwscf.dos` |
-| 12 | `plot` | gambar band, DOS, dan keduanya berdampingan |
-
-**Yang muncul selama jalan:** tiap tahap mencetak header, waktu mulai, waktu
-selesai, dan durasinya.
-
-```
-[5/12 SCF]
-  started : 2026-07-30 10:41:52
-Running pw.x : mos2_scf.in -> mos2_scf.out
-SUCCESS : /home/arsy54/QE_workflow/cases/mos2/mos2_scf.out
-  finished: 2026-07-30 10:42:03
-  duration: 0h0m11s
-```
-
-Di tahap 12 akan muncul baris penting:
-
-```
-[12/12 PLOT]
-  engine    : python
-  E_Fermi   : -2.0755 eV  (nscf output - the densest mesh, and what dos.x used)
-  window    : -5.0 .. 5.0 eV around E_Fermi
-  path      : G M K G
-wrote mos2_band.png
-```
-
-Baris `E_Fermi` menyebutkan **dari mana** angka nol diambil. Kalau tertulis
-`scf output - COARSE MESH FALLBACK`, berarti tahap nscf tidak jalan dan nolnya
-kurang bisa dipercaya.
-
-Baris `path` harus cocok dengan label di `band.path`-mu.
-
-**Selesai kalau muncul:**
-
-```
-=========================================
-Workflow Finished Successfully
-=========================================
-```
-
-## 7. Lihat hasilnya
-
-```bash
-ls cases/mos2/
-```
-
-```
-mos2_band.png           gambar band structure
-mos2_dos.png            gambar DOS
-mos2_band_dos.png       keduanya berdampingan, satu sumbu energi
-mos2_plot.py            skrip yang menggambar ketiganya
-
-pwscf.bands.dat.gnu     data band mentah
-pwscf.dos               data DOS mentah (baris pertama memuat E_Fermi)
-
-mos2_relax.out          output tiap tahap
-mos2_scf.out
-mos2_band.out
-mos2_nscf.out
-```
-
-Semua gambar diukur dari E_Fermi, jadi **0 pada sumbu tegak = E_Fermi**, ditandai
-garis putus-putus merah.
-
-## 8. Menyetel ulang gambar
-
-```bash
-cd cases/mos2
-nano mos2_plot.py
-python3 mos2_plot.py
-```
-
-Di bagian atas `mos2_plot.py` ada blok pengaturan:
-
-```python
-# ------------------------------- settings --------------------------------
-E_FERMI    = -2.0755
-EMIN, EMAX = -5.0, 5.0          # jendela energi, eV, relatif E_FERMI
-TICKS      = [0.0, 0.5774, 1.0865, 1.4714]
-LABELS     = ["G", "M", "K", "G"]
-BAND_COLOR = "#1f4e79"
-DPI        = 300
-# -------------------------------------------------------------------------
-```
-
-Ubah seperlunya lalu jalankan sendiri. **Tidak ada perhitungan DFT yang
-diulang** — skrip ini cuma membaca file data yang sudah jadi, hitungannya
-beberapa detik.
-
-Menjalankan `bash qe.sh plot ...` lagi akan **menimpa** file ini, jadi simpan
-salinan dengan nama lain kalau sudah kamu setel.
-
-Untuk menggambar ulang tanpa menghitung apa pun — misalnya setelah menyalin
-folder case dari cluster ke laptop:
-
-```bash
-bash qe.sh plot cases/mos2/mos2_relax.in
-```
-
-## 9. Kalau ada yang gagal
-
-```bash
-bash qe.sh check cases/mos2/mos2_relax.in
-```
-
-Menampilkan tahap mana yang selesai dan mana yang gagal, beserta diagnosis
-sebab dan solusinya untuk error QE yang pesannya tidak menjelaskan sebabnya
-sendiri.
-
-```
-SUCCESS : mos2_relax.out
-SUCCESS : mos2_scf.out
-FAILED  : mos2_band.out
-
-  DIAGNOSIS: 'wrong record length' from diropn means a rank ended up
-  with zero plane waves ...
-  FIX: raise NPOOL in config.sh, or lower NPROC.
-
-3 output(s) checked, 1 failed.
-```
-
-**Kalau run terhenti di tengah** (batas waktu, `scancel`, Ctrl-C), bersihkan
-dulu sebelum mengulang:
-
-```bash
-rm -rf cases/mos2/{work,cache,logs}
-```
-
-Ini **wajib**. Kalau tidak, run berikutnya akan memakai sisa `work/` yang
-setengah jadi.
-
-## 10. Menjalankan satu tahap saja
-
-Untuk debugging, tiap tahap bisa dipanggil sendiri asal tahap sebelumnya sudah
-pernah jalan:
-
-```bash
-bash qe.sh scf      cases/mos2/mos2_relax.in
-bash qe.sh gen-nscf cases/mos2/mos2_relax.in
-bash qe.sh plot     cases/mos2/mos2_relax.in
-```
-
-Daftar lengkap tahap:
-
-```bash
-bash qe.sh
-```
-
----
-
-# BAGIAN 3 — Disclaimer: Syarat Mutlak
-
-## A. Syarat yang ditolak sistem (kamu akan dapat pesan error)
-
-Kalau salah satu ini tidak dipenuhi, workflow berhenti di detik pertama dengan
-pesan yang menyebut sebab dan solusinya. Tidak ada perhitungan yang terlanjur
-jalan.
-
-### 1. Nama file harus berakhiran `_relax.in`
-
-```
-BENAR  : mos2_relax.in     ws2_relax.in     si_relax.in
-SALAH  : mos2.relax.in     mos2_relax.txt   relax_mos2.in
-```
-
-Garis bawah, bukan titik. Nama case diambil dari bagian sebelum `_relax.in`,
-dan semua file turunan dinamai dari situ (`mos2_scf.in`, `mos2_band.out`, dst).
-
-Ini juga yang membuat `bash qe.sh scf mos2_relax.in` tidak ambigu: nama tahap
-tidak pernah berakhiran `_relax.in`, jadi sistem tahu mana tahap dan mana file.
-
-### 2. `ibrav = 0`, dan harus ditulis eksplisit
+### `ibrav = 0`, ditulis eksplisit
 
 ```fortran
 &SYSTEM
@@ -441,18 +49,15 @@ tidak pernah berakhiran `_relax.in`, jadi sistem tahu mana tahap dan mana file.
 /
 ```
 
-`ibrav = 2`, `ibrav = 8`, atau `ibrav` yang tidak ditulis sama sekali — semua
-ditolak.
+Geometri dioper antar tahap sebagai card `CELL_PARAMETERS`. Input dengan
+`ibrav ≠ 0` mendeskripsikan kisi melalui `celldm`, sehingga tidak ada
+`CELL_PARAMETERS` untuk diambil.
 
-**Alasannya:** geometri dioper antar tahap sebagai card `CELL_PARAMETERS`.
-Input dengan `ibrav ≠ 0` mendeskripsikan kisinya lewat `celldm`/`A`/`B`/`C`,
-jadi tidak ada `CELL_PARAMETERS` untuk diambil.
+> Input dari tutorial atau paper umumnya memakai `ibrav ≠ 0`. Konversikan lebih
+> dulu: hitung tiga vektor kisi dari `celldm`, tulis sebagai card
+> `CELL_PARAMETERS`, lalu set `ibrav = 0`.
 
-**Kalau inputmu dari tutorial atau paper** yang biasanya memakai `ibrav ≠ 0`,
-konversikan dulu: hitung tiga vektor kisi dari `celldm`, tulis sebagai card
-`CELL_PARAMETERS`, lalu set `ibrav = 0`.
-
-### 3. Harus ada card `CELL_PARAMETERS`
+### Harus ada card `CELL_PARAMETERS`
 
 ```fortran
 CELL_PARAMETERS {angstrom}
@@ -461,59 +66,36 @@ CELL_PARAMETERS {angstrom}
 0.000000000 0.000000000 20.000000000
 ```
 
-Konsekuensi dari nomor 2. Juga dipakai `init` untuk mengukur kisi.
-
-### 4. `K_POINTS` harus `automatic` atau `gamma`
+### `K_POINTS` harus `automatic` atau `gamma`
 
 ```fortran
 K_POINTS {automatic}
 12 12 1 0 0 0
 ```
 
-atau, untuk molekul terisolasi:
+`K_POINTS crystal`, `tpiba`, dan daftar titik eksplisit **ditolak**. Tahap nscf
+perlu memperbesar mesh ini untuk memperoleh DOS yang halus, sedangkan daftar
+titik eksplisit tidak memiliki mesh untuk diperbesar.
 
-```fortran
-K_POINTS {gamma}
-```
+Untuk molekul terisolasi gunakan `K_POINTS {gamma}`, disertai `NPOOL_WANTED=1`
+di `config.sh`.
 
-**Ditolak:** `K_POINTS crystal`, `K_POINTS tpiba`, dan bentuk daftar titik
-eksplisit lainnya.
-
-**Alasannya:** tahap nscf perlu **memperbesar** mesh ini (dikali
-`NSCF_KPOINT_SCALE`) untuk mendapat DOS yang halus. Daftar titik eksplisit
-tidak punya mesh untuk diperbesar.
-
-Tahap band tidak terpengaruh — rutenya selalu diambil dari `<case>_band.path`,
-bukan dari sini.
-
-**Khusus `gamma`:** wajib `NPOOL_WANTED=1` di `config.sh`. Satu titik k tidak
-bisa dibagi ke beberapa pool.
-
-### 5. Parameter yang wajib ada
+### Parameter yang wajib ada
 
 | Parameter | Namelist |
 |---|---|
-| `ibrav` | `&SYSTEM` |
-| `nat` | `&SYSTEM` |
-| `ntyp` | `&SYSTEM` |
-| `ecutwfc` | `&SYSTEM` |
+| `ibrav`, `nat`, `ntyp`, `ecutwfc` | `&SYSTEM` |
 | `pseudo_dir` | `&CONTROL` |
 
-Ditambah card `ATOMIC_SPECIES` yang berisi nama file `.UPF`.
+Ditambah card `ATOMIC_SPECIES`. File `.UPF` yang disebut di dalamnya harus
+benar-benar tersedia di `pseudo_dir`.
 
-### 6. File pseudopotensial harus benar-benar ada
+## 1.2 Syarat yang TIDAK diperiksa sistem
 
-Nama di `ATOMIC_SPECIES` harus cocok dengan file yang ada di `pseudo_dir`.
-Periksa dengan `ls` sebelum menjalankan.
+**Bagian ini yang paling sering menimbulkan masalah.** Tidak ada pesan error,
+perhitungan selesai dengan sukses, tetapi hasilnya keliru.
 
----
-
-## B. Syarat yang TIDAK ditolak sistem — tanggung jawabmu sendiri
-
-**Ini bagian yang paling berbahaya.** Sistem tidak memeriksanya, tidak ada
-error, tapi hasilnya salah.
-
-### 1. `calculation` harus `'relax'` atau `'vc-relax'`
+### `calculation` harus `'relax'` atau `'vc-relax'`
 
 ```fortran
 &CONTROL
@@ -521,107 +103,268 @@ error, tapi hasilnya salah.
 /
 ```
 
-**Tidak diperiksa sistem.** Kalau kamu tulis `'scf'`, workflow tetap jalan,
-tapi tahap `extract` tidak menemukan blok `Begin final coordinates` dan
-diam-diam memakai posisi dari input. Untuk `vc-*` ada peringatan; untuk `scf`
-tidak ada.
+Bila ditulis `'scf'`, sistem tetap berjalan tetapi struktur hasil relaksasi
+tidak ditemukan, dan posisi atom diambil dari input tanpa pemberitahuan.
 
-Pakai `relax` kalau ingin selnya tetap (mengikuti struktur acuan), `vc-relax`
-kalau selnya juga ingin dioptimasi.
+Gunakan `relax` bila bentuk sel ingin dipertahankan, `vc-relax` bila sel juga
+ingin dioptimasi.
 
-### 2. Satu material = satu folder
+### Satu material = satu folder
 
-Hasil akhir selalu bernama `pwscf.dos` dan `pwscf.bands.dat.gnu`. Dua material
-dalam satu folder akan saling menimpa, **tanpa peringatan**.
+File hasil akhir selalu bernama `pwscf.dos` dan `pwscf.bands.dat.gnu`. Dua
+material dalam satu folder akan saling menimpa hasilnya tanpa peringatan.
 
-### 3. `occupations` harus cocok dengan jenis materialnya
+### `occupations` harus sesuai jenis material
 
-| Material | Yang benar |
+| Material | Pengaturan |
 |---|---|
-| Logam, semimetal (graphene) | `occupations = 'smearing'` + `smearing` + `degauss` |
-| Semikonduktor, insulator | `'smearing'` (aman) atau `'fixed'` |
+| Logam, semimetal (misalnya graphene) | `occupations = 'smearing'` + `smearing` + `degauss` |
+| Semikonduktor, insulator | `'smearing'` atau `'fixed'` |
 
-Kalau `occupations` tidak ditulis, QE memakai `'fixed'`. Untuk graphene itu
-**salah** — pita valensi dan konduksi bersentuhan di titik Dirac, tidak ada
-gap. Parser mencetak `note:` kalau ini terjadi, jadi baca keluaran `dump`.
+Bila `occupations` tidak ditulis, QE memakai `'fixed'`. Untuk graphene itu
+keliru, karena pita valensi dan konduksi bersentuhan di titik Dirac.
 
-### 4. Konvergensi fisika tetap tanggung jawabmu
+### Konvergensi fisika bukan tanggung jawab sistem
 
-Workflow **tidak memeriksa**:
+Sistem tidak memeriksa ketebalan vakum, kecukupan `ecutwfc`, kerapatan mesh k,
+maupun rasio `ecutrho/ecutwfc`. Nilai yang terlalu kecil menghasilkan
+perhitungan yang selesai dengan sukses namun tidak bermakna.
 
-- ketebalan vakum cukup atau tidak untuk slab
-- `ecutwfc` sudah konvergen atau belum
-- kerapatan mesh k cukup atau belum
-- rasio `ecutrho/ecutwfc` (untuk pseudo ultrasoft minimal 8, PAW sekitar 8–12)
+### `nbnd` tidak dinaikkan otomatis
 
-Angka yang terlalu kecil akan menghasilkan perhitungan yang selesai dengan
-sukses tapi hasilnya tidak bermakna.
-
-### 5. `nbnd` tidak dinaikkan otomatis
-
-Kalau inputmu tidak menulis `nbnd`, QE memakai defaultnya — kira-kira
-1.2 × jumlah elektron/2. Untuk band structure itu sering hanya menyisakan
-sedikit pita konduksi, sehingga bagian atas grafik kosong.
-
-Solusinya: tulis `nbnd` di `&SYSTEM` file relax-mu. Nilainya akan lewat
-passthrough dan sampai ke tahap band. Pastikan namanya muncul di baris
-`&SYSTEM passthrough` saat `dump`.
-
-### 6. Rute band adalah pilihanmu, bukan kebenaran mutlak
-
-`init` menulis rute **standar** untuk kisi tersebut. Itu belum tentu rute yang
-dipakai paper pembandingmu. Kalau ingin dibandingkan berdampingan, samakan
-rutenya secara manual.
-
-### 7. Untuk material bergap, jangan pakai E_Fermi sebagai acuan gambar
-
-Dengan smearing, E_Fermi ditempatkan di mana pun integral okupasi jatuh —
-biasanya dekat tepi pita, bukan di tengah gap. Untuk gambar publikasi, acuan
-yang benar adalah **VBM** (puncak pita valensi).
-
-Caranya: cari VBM dari data pita, lalu set `E_FERMI` ke nilai itu di
-`<case>_plot.py` dan jalankan ulang skripnya.
-
-### 8. Jangan membaca lebar gap dari gambar DOS
-
-`dos.x` mewarisi pelebaran (smearing) dari tahap nscf. Untuk material bergap,
-pelebaran itu mengaburkan tepi gap sehingga gap terbaca lebih sempit dari
-seharusnya — dan dengan smearing Methfessel-Paxton, DOS di dalam gap bahkan
-bisa sedikit negatif.
-
-Baca lebar gap dari **data pita** (`pwscf.bands.dat.gnu`), bukan dari grafik
-DOS.
+Bila `nbnd` tidak ditulis, QE memakai nilai bawaan yang menyisakan sedikit pita
+konduksi, sehingga bagian atas grafik band menjadi kosong. Tulis `nbnd` di
+`&SYSTEM` bila diperlukan.
 
 ---
 
-## C. Catatan mesin
+# 2. Urutan Perintah
+
+Contoh untuk material bernama `mos2`.
+
+### Laptop
+
+```bash
+cd ~/QE_automation
+mkdir -p cases/mos2
+cp /lokasi/file/mos2_relax.in cases/mos2/
+bash qe.sh init cases/mos2/mos2_relax.in
+bash qe.sh dump cases/mos2/mos2_relax.in
+bash qe.sh      cases/mos2/mos2_relax.in
+```
+
+### Cluster (SLURM)
+
+```bash
+cd _scratch/arsy/QE_automation
+mkdir -p cases/mos2
+cp /lokasi/file/mos2_relax.in cases/mos2/
+bash   qe.sh init cases/mos2/mos2_relax.in
+bash   qe.sh dump cases/mos2/mos2_relax.in
+sbatch qe.sh      cases/mos2/mos2_relax.in
+squeue -u $USER
+```
+
+Perbedaannya hanya pada baris terakhir: `bash` di laptop, `sbatch` di cluster.
+
+---
+
+# 3. Penjelasan Tiap Perintah
+
+## `mkdir -p cases/mos2`
+
+Membuat folder khusus untuk satu material. Seluruh file — input, output, data,
+gambar — akan berada di dalamnya.
+
+## `cp ... cases/mos2/`
+
+Menempatkan file input relax ke dalam folder tersebut.
+
+## `bash qe.sh init ...`
+
+**Membuat jalur band.**
+
+Sistem mengukur panjang rusuk dan sudut sel dari `CELL_PARAMETERS`,
+menyimpulkan jenis kisinya, lalu menulis `mos2_band.path` berisi rute titik
+simetri yang sesuai.
+
+```
+Lattice measured from mos2_relax.in:
+  a = 3.1900   b = 3.1900   c = 20.0000
+  alpha = 90.00   beta = 90.00   gamma = 60.00
+  -> hexagonal slab, gamma=60 setting  (2D: path stays at k_z = 0)
+
+Band path written: cases/mos2/mos2_band.path
+  0.0000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! G
+  0.5000000000  0.0000000000  0.0000000000  __BAND_POINTS__   ! M
+  0.6666666667  0.3333333333  0.0000000000  __BAND_POINTS__   ! K
+  0.0000000000  0.0000000000  0.0000000000   1                ! G
+```
+
+**Periksa baris `->`.** Pastikan jenis kisi yang disimpulkan sesuai dengan
+material yang dimaksud. Bila tertulis "tetragonal" padahal materialnya
+heksagonal, berarti ada yang keliru pada `CELL_PARAMETERS`.
+
+Jalur yang salah **tidak menghasilkan error** — grafiknya tetap keluar dan
+tampak wajar, tetapi isinya bukan yang dimaksud. Karena itu langkah ini
+dipisahkan, agar hasilnya dapat diperiksa lebih dulu.
+
+Bila jenis kisi tidak dikenali, sistem menolak menebak dan meminta jalur
+ditulis manual. File `.path` yang sudah ada tidak pernah ditimpa, sehingga
+jalur tulisan tangan selalu diutamakan.
+
+## `bash qe.sh dump ...`
+
+**Memeriksa pembacaan input.** Gratis, beberapa detik, tanpa perhitungan.
+
+Menampilkan parameter yang terbaca sistem. Cocokkan `NAT`, `NTYP`, `ECUTWFC`,
+`K_POINTS`, dan nama file pseudopotensial dengan yang dimaksud.
+
+Dua hal yang perlu diperhatikan pada keluarannya:
+
+**Baris `note: ... using default ...`** — ada parameter yang tidak ditulis di
+input dan diisi otomatis. Pastikan nilai bawaannya memang sesuai.
+
+**Baris `passthrough`** — sistem mengenali 16 parameter utama; parameter di
+luar itu disalin apa adanya ke tahap berikutnya. Bila menggunakan `vdw_corr`,
+`nspin`, atau `nbnd`, namanya **harus** muncul di baris `&SYSTEM passthrough`.
+Tulisan `(none)` berarti tidak ada parameter tambahan, bukan error.
+
+## `bash qe.sh ...` / `sbatch qe.sh ...`
+
+**Menjalankan seluruh pipeline**, 12 tahap berurutan:
+
+| # | Tahap | Isinya |
+|---|---|---|
+| 1 | `parser` | membaca input |
+| 2 | `relax` | optimasi struktur |
+| 3 | `extract` | mengambil geometri hasil relaksasi |
+| 4–5 | `gen-scf`, `scf` | menghitung rapat muatan |
+| 6–8 | `gen-band`, `band`, `bandsx` | energi sepanjang jalur band |
+| 9–10 | `gen-nscf`, `nscf` | mesh k lebih rapat untuk DOS |
+| 11 | `dos` | menghasilkan data DOS |
+| 12 | `plot` | menggambar band dan DOS |
+
+Setiap tahap mencetak waktu mulai, selesai, dan durasinya. Proses selesai bila
+muncul:
+
+```
+Workflow Finished Successfully
+```
+
+Beberapa material sekaligus dalam satu job:
+
+```bash
+sbatch qe.sh cases/mos2/mos2_relax.in cases/ws2/ws2_relax.in
+```
+
+Keduanya berjalan bergantian. Satu material yang gagal tidak menghentikan yang
+lain.
+
+---
+
+# 4. Hasil
+
+Seluruhnya berada di dalam folder material:
+
+```
+cases/mos2/
+├── mos2_band.png          gambar band structure
+├── mos2_dos.png           gambar DOS
+├── mos2_band_dos.png      keduanya berdampingan, satu sumbu energi
+├── mos2_plot.py           skrip yang menggambar ketiganya
+├── pwscf.bands.dat.gnu    data band
+└── pwscf.dos              data DOS
+```
+
+Pada semua gambar, **angka 0 pada sumbu tegak menandai E_Fermi**, ditampilkan
+sebagai garis putus-putus merah.
+
+## Menyetel ulang gambar
+
+```bash
+cd cases/mos2
+nano mos2_plot.py
+python3 mos2_plot.py
+```
+
+Bagian atas skrip berisi blok pengaturan yang dapat diubah bebas:
+
+```python
+E_FERMI    = -2.0755
+EMIN, EMAX = -5.0, 5.0      # jendela energi, eV, relatif E_FERMI
+LABELS     = ["G", "M", "K", "G"]
+DPI        = 300
+```
+
+Menjalankan ulang skrip ini **tidak mengulang perhitungan DFT** — hanya membaca
+data yang sudah jadi, selesai dalam hitungan detik.
+
+> Untuk material bergap, sebaiknya `E_FERMI` diisi nilai **VBM** (puncak pita
+> valensi), bukan E_Fermi. Dengan smearing, E_Fermi ditempatkan di dekat tepi
+> pita, bukan di tengah gap.
+>
+> Lebar gap juga sebaiknya dibaca dari data pita, bukan dari grafik DOS —
+> pelebaran pada DOS membuat gap terbaca lebih sempit dari seharusnya.
+
+---
+
+# 5. Bila Terjadi Kegagalan
+
+```bash
+bash qe.sh check cases/mos2/mos2_relax.in
+```
+
+Menampilkan tahap mana yang berhasil dan mana yang gagal, disertai diagnosis
+penyebab beserta solusinya.
+
+Bila proses terhenti di tengah jalan (batas waktu, `scancel`, Ctrl-C),
+**bersihkan lebih dulu** sebelum mengulang:
+
+```bash
+rm -rf cases/mos2/{work,cache,logs}
+```
+
+Tanpa ini, proses berikutnya akan memakai sisa perhitungan yang belum selesai.
+
+## Menjalankan satu tahap saja
+
+```bash
+bash qe.sh scf  cases/mos2/mos2_relax.in
+bash qe.sh plot cases/mos2/mos2_relax.in
+```
+
+Daftar lengkap tahap yang tersedia:
+
+```bash
+bash qe.sh
+```
+
+---
+
+# 6. Catatan Mesin
 
 | | Laptop | Cluster |
 |---|---|---|
-| Menjalankan | `bash qe.sh ...` | `sbatch qe.sh ...` |
-| Jumlah proses | jumlah core fisik, dideteksi otomatis | dari alokasi SLURM |
+| Menjalankan | `bash qe.sh` | `sbatch qe.sh` |
+| Jumlah proses | core fisik, terdeteksi otomatis | dari alokasi SLURM |
 | `pw.x` | dari `PATH` | dari module |
-| Gambar | matplotlib | **tidak ada** — lihat catatan di bawah |
 
-File `qe.sh`, `config.sh`, dan seluruh `lib/` **identik** di laptop dan
-cluster. Keduanya mendeteksi mesinnya sendiri, bukan dikonfigurasi terpisah.
-Perbedaan di antara keduanya adalah bug, bukan setelan. Periksa dengan
-`md5sum qe.sh config.sh lib/*.sh` di kedua sisi.
+File `qe.sh`, `config.sh`, dan seluruh `lib/` **identik** di kedua mesin.
+Keduanya mendeteksi lingkungannya sendiri, bukan dikonfigurasi terpisah.
 
-**Di cluster tidak ada matplotlib maupun gnuplot di PATH**, jadi tahap `plot`
-akan melewati dirinya sendiri dengan pesan penjelasan — perhitungan **tetap
-dinyatakan berhasil**, hanya gambarnya yang tidak dibuat. Salin folder case ke
-laptop lalu jalankan `bash qe.sh plot ...` di sana:
+Bila cluster tidak memiliki matplotlib maupun gnuplot, tahap `plot` akan
+dilewati disertai pesan penjelasan — **perhitungan tetap dinyatakan berhasil**,
+hanya gambarnya yang tidak dibuat. Salin folder material ke laptop, lalu gambar
+di sana:
 
 ```bash
-scp -r mahameru:_scratch/arsy/QE_workflow_v2/cases/mos2 ~/QE_workflow/cases/
-cd ~/QE_workflow
+scp -r <cluster>:_scratch/arsy/QE_automation/cases/mos2 ~/QE_automation/cases/
+cd ~/QE_automation
 bash qe.sh plot cases/mos2/mos2_relax.in
 ```
 
 ---
 
-Detail teknis, riwayat bug yang sudah diperbaiki, dan keterbatasan yang masih
-terbuka ada di `MAINTENANCE.md` — dokumen itu untuk siapa pun yang akan
-**mengedit** `qe.sh`. `README.md` menjelaskan apa yang workflow ini lakukan dan
-kenapa dibangun seperti ini.
+Dokumen lain: `README.md` menjelaskan cara kerja dan alasan rancangannya;
+`MAINTENANCE.md` ditujukan bagi siapa pun yang akan mengubah kodenya.

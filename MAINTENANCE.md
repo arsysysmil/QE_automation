@@ -16,8 +16,8 @@ These copies exist and they are NOT all in sync:
 
 | Copy | State |
 |---|---|
-| `QE_workflow_v2/` on the cluster | **authoritative** |
-| laptop `~/QE_workflow/` | mirror of this one, added 2026-07-27. `qe.sh`, `config.sh` and `lib/` are byte-identical to the cluster's and must stay that way (§1.6) — it is a deployment, not a fork. Local runs live in `cases/`. |
+| `QE_automation/` on the cluster | **authoritative** |
+| laptop `~/QE_automation/` | mirror of this one, added 2026-07-27. `qe.sh`, `config.sh` and `lib/` are byte-identical to the cluster's and must stay that way (§1.6) — it is a deployment, not a fork. Local runs live in `cases/`. |
 | the v1 directory beside it | v1, twelve files, **retired 2026-07-27**. Everything it did is in the current layout, including `script/check_job.sh` which came back as the `check` step (§1b). Kept only as a historical reference: it still has the vc-relax cell bug of §1.1 and none of the fixes below. Do not run it and do not develop there. |
 | this repository | up to date as of 2026-07-27 (PRs #1 and #2). Code files identical to the cluster's; **only `MAINTENANCE.md` differs**, and only in §5, which is generalised there because the repo is public. Never publish the account or folder names from §5. |
 
@@ -212,7 +212,7 @@ overwrites input values (`DEFAULT_*` namespacing); the band k-path is per case
 and never guessed; `smearing`/`degauss` are required only under
 `occupations='smearing'`; the nscf k-mesh respects `cell_dofree`; `NPOOL`
 (`-nk`) is what actually fixed `wrong record length`, not the pseudopotential
-family. See README.md §"What changed from QE_workflow" for the reasoning.
+family. See README.md §"What changed from v1" for the reasoning.
 
 ---
 
@@ -539,7 +539,7 @@ two sources are distinguishable in `cache/structure.in`.
 `_v2test/` in `../` holds the throwaway cases used for the end-to-end runs
 (graphene 2 atoms, MoS2 unit cell 3 atoms, and the same MoS2 plus
 nbnd/nspin/starting_magnetization/vdw_corr). On the laptop the equivalents are
-in `~/QE_workflow/cases/`. All are workflow tests, not publishable physics —
+in `~/QE_automation/cases/`. All are workflow tests, not publishable physics —
 the cutoffs exercise the pipeline, they are not converged.
 
 A run does not need the `short` partition. `sbatch -p interactive qe.sh ...`

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=QE_workflow
+#SBATCH --job-name=QE_automation
 #SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=64

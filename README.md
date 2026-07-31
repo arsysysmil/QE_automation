@@ -1,8 +1,8 @@
-# QE Workflow v2
+# QE_automation
 
 Author: Arsy Syamil
 
-Rewrite of `../QE_workflow` (v1). v1 is retired — everything it did is here,
+Rewrite of the older `QE_workflow` (v1). v1 is retired — everything it did is here,
 including its `script/check_job.sh`, which came back as the `check` step.
 
 Layout: a thin `qe.sh` that resolves paths, loads settings, declares which
@@ -137,7 +137,7 @@ Per case, next to the input file:
     <case>_band_dos.png
     <case>_plot.py  or  _plot.gnu      the script that drew them - yours to edit
 
-## What changed from QE_workflow
+## What changed from v1
 
 ### 1. Six files instead of twelve, and none of them a separate process
 

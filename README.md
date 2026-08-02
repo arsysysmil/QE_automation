@@ -44,9 +44,9 @@ are declared in `config.sh` for them.
 
 ## Usage
 
-    sbatch qe.sh case_relax.in                    # full pipeline
-    sbatch qe.sh caseA_relax.in caseB_relax.in    # several cases, one job
     sbatch qe.sh cases/gra                        # every case in that folder
+    sbatch qe.sh case_relax.in                    # one case
+    sbatch qe.sh caseA_relax.in caseB_relax.in    # a chosen few of them
 
     bash qe.sh init  case_relax.in    # measure the lattice, write the k-path
     bash qe.sh dump  case_relax.in    # print everything the parser read
@@ -55,14 +55,16 @@ are declared in `config.sh` for them.
 
     bash qe.sh                        # the full step list
 
-A step name never ends in `_relax.in` and is never a directory, so all three
-forms are unambiguous, and any step accepts several cases.
+**Naming a folder is the normal way.** It stands for every `*_relax.in` inside
+it, in name order: one folder, one job, its cases one after another — the
+`run.sh` convention from the cluster, without the hand-written file list that
+goes stale. Adding a case to the folder adds it to the run, and nothing else has
+to be edited. Not recursive: the folder you name is the folder that runs, so
+`qe.sh cases` cannot become a week-long accident.
 
-A **folder** argument stands for every `*_relax.in` inside it, in name order:
-one folder, one job, its cases one after another — the `run.sh` convention from
-the cluster, without the hand-written file list that goes stale. Adding a case
-to the folder adds it to the run. Not recursive: the folder you name is the
-folder that runs, so `qe.sh cases` cannot become a week-long accident.
+Naming files instead is for picking a few out of a folder that holds more. A
+step name never ends in `_relax.in` and is never a directory, so all three forms
+are unambiguous, and any step accepts any of them.
 
 Cases run one after another, each getting the whole allocation. Every input is
 validated before anything starts, a failing case does not stop the others, and

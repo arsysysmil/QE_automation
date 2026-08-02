@@ -189,6 +189,14 @@ bash qe.sh cases/mos2/mos2_relax.in
 **`mkdir -p cases/mos2`** — folder untuk satu material. Semua file, input
 sampai gambar, berada di dalamnya.
 
+Nama `cases/` cuma kebiasaan, bukan keharusan. `qe.sh` menerima path mana pun,
+jadi folder data yang sudah ada bisa langsung ditunjuk:
+
+```bash
+bash qe.sh init ../ws2/running_TS_semua
+sbatch -p medium-small -t 3-00:00:00 qe.sh ../ws2/running_TS_semua
+```
+
 **`bash qe.sh init ...`** — membuat jalur band. Sistem mengukur panjang rusuk
 dan sudut sel dari `CELL_PARAMETERS`, menyimpulkan jenis kisinya, lalu menulis
 `mos2_band.path`:
@@ -248,11 +256,43 @@ tahap berurutan:
 Tiap tahap mencetak waktu mulai, selesai, dan durasinya. Selesai bila muncul
 `Workflow Finished Successfully`.
 
-**`sbatch -p medium-small -t 3-00:00:00`** — partisi dan batas waktu. Tanpa itu
-kamu dapat partisi `short` dengan batas 24 jam. Sesuaikan lewat baris perintah,
-jangan mengedit `qe.sh`, karena file itu harus tetap identik di laptop dan HPC.
-Sepuluh case WS₂ dengan ~6,5 jam per case butuh sekitar 65 jam, jadi 3 hari.
-Batas yang benar-benar berlaku dicetak di kepala log.
+**`sbatch -p medium-small -t 3-00:00:00`** — partisi dan batas waktu.
+
+Tanpa keduanya kamu dapat `short` dengan batas 24 jam, sesuai header `qe.sh`.
+Itu jalan normal, bukan gagal — cukup untuk satu case kecil.
+
+Partisi yang tersedia:
+
+| Partisi | Batas waktu | Node |
+|---|---|---|
+| `short` (bawaan) | 1 hari | 48 |
+| `medium-small` | 3 hari | 22 |
+| `medium-large` | 3 hari | 12 |
+| `long` | 7 hari | 3 |
+| `very-long` | 30 hari | 3 |
+| `interactive` | 2 jam | 2 |
+
+**Perangkap yang perlu diketahui:** kalau kamu menaikkan `-t` tapi lupa
+mengganti partisinya, SLURM di cluster ini **tidak menolak** — job diterima,
+lalu menggantung di antrean selamanya. Diuji langsung: minta 30 hari di `short`
+diterima tanpa keluhan. Penyebabnya `EnforcePartLimits = NO`.
+
+Cirinya di `squeue` kolom paling kanan:
+
+```
+JOBID  PARTITION  ST  TIME  NODES  NODELIST(REASON)
+507746 short      PD  0:00      1  (PartitionTimeLimit)
+```
+
+`PD` yang tidak pernah berubah, dengan alasan `PartitionTimeLimit`. Kalau
+melihat itu, `scancel` lalu submit ulang dengan partisi yang benar.
+
+Jadi `-p` dan `-t` selalu diubah **berpasangan**. Sepuluh case WS₂ dengan ~6,5
+jam per case butuh sekitar 65 jam, jadi `-p medium-small -t 3-00:00:00`.
+
+Sesuaikan lewat baris perintah, jangan mengedit `qe.sh`, karena file itu harus
+tetap identik di laptop dan HPC. Batas yang benar-benar berlaku dicetak di
+kepala log.
 
 **`bash qe.sh check ...`** — menampilkan sampai tahap mana sebuah run berjalan,
 apa yang gagal, dan kenapa. Berguna terutama kalau job dibunuh batas waktu:

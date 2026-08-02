@@ -75,6 +75,13 @@ Sizing is done per submission rather than by editing `qe.sh`, since flags beat
 
     sbatch -p medium-small -t 3-00:00:00 qe.sh cases/ws2_TS
 
+`-p` and `-t` move together. This cluster runs `EnforcePartLimits = NO`, so a
+job asking for more time than its partition allows is **accepted rather than
+rejected**, and then sits `PENDING` with reason `PartitionTimeLimit` forever.
+Verified: 30 days on a partition capped at 1 day was taken without complaint.
+The `#SBATCH --time=24:00:00` in the header is exactly the cap of the default
+`short` partition, so the defaults are consistent on their own.
+
 MEASURED, graphene + MoS2 in one job:
 
     sequential (CASES_PARALLEL=1, default)   3m07s

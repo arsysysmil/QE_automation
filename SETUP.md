@@ -1,192 +1,197 @@
-# QE_automation — Panduan Penggunaan
+# QE_automation
 
-## Apa ini
-
-QE_automation menjalankan rantai perhitungan Quantum ESPRESSO secara otomatis.
-Dari **satu file input relax**, sistem ini mengerjakan seluruh tahapan sampai
-selesai:
+Menjalankan rantai perhitungan Quantum ESPRESSO secara otomatis. Dari satu file
+input relax, seluruh tahapan dikerjakan sampai selesai:
 
 ```
 relax → scf → band → bands.x → nscf → dos → plot
 ```
 
-Hasil akhirnya: **band structure**, **DOS**, dan gambarnya dalam format PNG.
+Hasil akhirnya: struktur pita, DOS, gambar PNG, dan file CIF struktur sebelum
+dan sesudah relaksasi.
 
-Tanpa sistem ini, ketujuh tahap tersebut dijalankan manual satu per satu, dan
-setiap tahap memerlukan file input baru yang ditulis tangan dari hasil tahap
-sebelumnya.
-
-Sistem berjalan di laptop maupun di cluster SLURM dengan perintah yang sama.
+Tanpa ini, ketujuh tahap dijalankan satu per satu, dan tiap tahap butuh file
+input baru yang ditulis tangan dari hasil tahap sebelumnya. Perintahnya sama
+persis di laptop maupun di HPC.
 
 ---
 
-# 1. Syarat Wajib
+# Syarat file input
 
-**Baca bagian ini sebelum menjalankan apa pun.** Input yang tidak memenuhi
-syarat akan ditolak, atau lebih buruk lagi, tetap berjalan tetapi hasilnya
-keliru.
+Baca dulu sebelum menjalankan apa pun. Input yang tidak memenuhi syarat akan
+ditolak sistem, atau lebih buruk, tetap berjalan tetapi hasilnya keliru.
 
-## 1.1 Syarat yang diperiksa sistem
-
-Bila salah satu tidak dipenuhi, sistem berhenti seketika dengan pesan yang
-menyebut penyebab dan solusinya. Tidak ada perhitungan yang terlanjur berjalan.
-
-### Nama file harus berakhiran `_relax.in`
+**Nama file harus berakhiran `_relax.in`**
 
 ```
-BENAR  : mos2_relax.in     si_relax.in
-SALAH  : mos2.relax.in     mos2_relax.txt
+benar  : mos2_relax.in     ws2_co2_B1_relax.in
+salah  : mos2.relax.in     mos2_relax.txt
 ```
 
 Garis bawah, bukan titik. Nama material diambil dari bagian sebelum
-`_relax.in`, dan semua file turunan dinamai dari situ.
+`_relax.in`, dan semua file hasil dinamai dari situ.
 
-### `ibrav = 0`, ditulis eksplisit
+**`calculation` harus `relax` atau `vc-relax`**
+
+Pakai `relax` bila bentuk sel dipertahankan, `vc-relax` bila sel ikut
+dioptimasi. Kalau ditulis `scf`, sistem tetap jalan tapi posisi atom diambil
+dari input tanpa pemberitahuan.
+
+**`ibrav = 0`, ditulis eksplisit, disertai card `CELL_PARAMETERS`**
 
 ```fortran
 &SYSTEM
     ibrav = 0
 /
-```
 
-Geometri dioper antar tahap sebagai card `CELL_PARAMETERS`. Input dengan
-`ibrav ≠ 0` mendeskripsikan kisi melalui `celldm`, sehingga tidak ada
-`CELL_PARAMETERS` untuk diambil.
-
-> Input dari tutorial atau paper umumnya memakai `ibrav ≠ 0`. Konversikan lebih
-> dulu: hitung tiga vektor kisi dari `celldm`, tulis sebagai card
-> `CELL_PARAMETERS`, lalu set `ibrav = 0`.
-
-### Harus ada card `CELL_PARAMETERS`
-
-```fortran
 CELL_PARAMETERS {angstrom}
 3.190000000 0.000000000 0.000000000
 1.595000000 2.762620000 0.000000000
 0.000000000 0.000000000 20.000000000
 ```
 
-### `K_POINTS` harus `automatic` atau `gamma`
+Geometri dioper antar tahap sebagai `CELL_PARAMETERS`. Input dengan
+`ibrav ≠ 0` mendeskripsikan kisi lewat `celldm`, jadi tidak ada yang bisa
+diambil. Input dari tutorial atau paper umumnya begitu — konversikan dulu:
+hitung tiga vektor kisi dari `celldm`, tulis sebagai card, set `ibrav = 0`.
+
+**`K_POINTS` harus `automatic` atau `gamma`**
 
 ```fortran
 K_POINTS {automatic}
 12 12 1 0 0 0
 ```
 
-`K_POINTS crystal`, `tpiba`, dan daftar titik eksplisit **ditolak**. Tahap nscf
-perlu memperbesar mesh ini untuk memperoleh DOS yang halus, sedangkan daftar
-titik eksplisit tidak memiliki mesh untuk diperbesar.
+Bentuk `crystal`, `tpiba`, dan daftar titik eksplisit ditolak. Tahap nscf perlu
+memperbesar mesh ini untuk DOS yang halus, sedangkan daftar titik eksplisit
+tidak punya mesh untuk diperbesar. Untuk molekul terisolasi pakai
+`K_POINTS {gamma}` disertai `NPOOL_WANTED=1` di `config.sh`.
 
-Untuk molekul terisolasi gunakan `K_POINTS {gamma}`, disertai `NPOOL_WANTED=1`
-di `config.sh`.
-
-### Parameter yang wajib ada
+**Parameter yang wajib ada**
 
 | Parameter | Namelist |
 |---|---|
 | `ibrav`, `nat`, `ntyp`, `ecutwfc` | `&SYSTEM` |
 | `pseudo_dir` | `&CONTROL` |
 
-Ditambah card `ATOMIC_SPECIES`. File `.UPF` yang disebut di dalamnya harus
-benar-benar tersedia di `pseudo_dir`.
+Ditambah card `ATOMIC_SPECIES`, dan file `.UPF` yang disebut di dalamnya harus
+benar-benar ada di `pseudo_dir`.
 
-## 1.2 Syarat yang TIDAK diperiksa sistem
-
-**Bagian ini yang paling sering menimbulkan masalah.** Tidak ada pesan error,
-perhitungan selesai dengan sukses, tetapi hasilnya keliru.
-
-### `calculation` harus `'relax'` atau `'vc-relax'`
-
-```fortran
-&CONTROL
-    calculation = 'relax'
-/
-```
-
-Bila ditulis `'scf'`, sistem tetap berjalan tetapi struktur hasil relaksasi
-tidak ditemukan, dan posisi atom diambil dari input tanpa pemberitahuan.
-
-Gunakan `relax` bila bentuk sel ingin dipertahankan, `vc-relax` bila sel juga
-ingin dioptimasi.
-
-### Satu material = satu folder
-
-File hasil akhir selalu bernama `pwscf.dos` dan `pwscf.bands.dat.gnu`. Dua
-material dalam satu folder akan saling menimpa hasilnya tanpa peringatan.
-
-### `occupations` harus sesuai jenis material
+**`occupations` harus sesuai jenis material**
 
 | Material | Pengaturan |
 |---|---|
-| Logam, semimetal (misalnya graphene) | `occupations = 'smearing'` + `smearing` + `degauss` |
-| Semikonduktor, insulator | `'smearing'` atau `'fixed'` |
+| Logam, semimetal (graphene) | `smearing` + `smearing` + `degauss` |
+| Semikonduktor, insulator | `smearing` atau `fixed` |
 
-Bila `occupations` tidak ditulis, QE memakai `'fixed'`. Untuk graphene itu
-keliru, karena pita valensi dan konduksi bersentuhan di titik Dirac.
+Kalau tidak ditulis, QE memakai `fixed`. Untuk graphene itu keliru.
 
-### Konvergensi fisika bukan tanggung jawab sistem
-
-Sistem tidak memeriksa ketebalan vakum, kecukupan `ecutwfc`, kerapatan mesh k,
-maupun rasio `ecutrho/ecutwfc`. Nilai yang terlalu kecil menghasilkan
-perhitungan yang selesai dengan sukses namun tidak bermakna.
-
-### `nbnd` tidak dinaikkan otomatis
-
-Bila `nbnd` tidak ditulis, QE memakai nilai bawaan yang menyisakan sedikit pita
-konduksi, sehingga bagian atas grafik band menjadi kosong. Tulis `nbnd` di
-`&SYSTEM` bila diperlukan.
+**Satu folder boleh berisi banyak file**, asal tiap input tidak menuliskan
+`prefix` yang sama. Kalau `prefix` tidak ditulis sama sekali, sistem memakai
+nama case, dan hasilnya otomatis terpisah.
 
 ---
 
-# 2. Urutan Perintah
+# Cara pakai
 
-Contoh untuk material bernama `mos2`.
+## Skema 1 — satu material
 
-### Laptop
+Di laptop:
 
 ```bash
 cd ~/QE_automation
 mkdir -p cases/mos2
-cp /lokasi/file/mos2_relax.in cases/mos2/
+cp /lokasi/mos2_relax.in cases/mos2/
 bash qe.sh init cases/mos2/mos2_relax.in
 bash qe.sh dump cases/mos2/mos2_relax.in
-bash qe.sh      cases/mos2/mos2_relax.in
+bash qe.sh cases/mos2/mos2_relax.in
 ```
 
-### Cluster (SLURM)
+Di HPC:
 
 ```bash
 cd _scratch/arsy/QE_automation
 mkdir -p cases/mos2
-cp /lokasi/file/mos2_relax.in cases/mos2/
-bash   qe.sh init cases/mos2/mos2_relax.in
-bash   qe.sh dump cases/mos2/mos2_relax.in
-sbatch qe.sh      cases/mos2/mos2_relax.in
+cp /lokasi/mos2_relax.in cases/mos2/
+bash qe.sh init cases/mos2/mos2_relax.in
+bash qe.sh dump cases/mos2/mos2_relax.in
+sbatch -p medium-small -t 3-00:00:00 qe.sh cases/mos2/mos2_relax.in
 squeue -u $USER
 ```
 
-Perbedaannya hanya pada baris terakhir: `bash` di laptop, `sbatch` di cluster.
+Yang berbeda hanya baris terakhir: `bash` di laptop, `sbatch` di HPC.
+
+## Skema 2 — beberapa material sekaligus
+
+Taruh semua file `_relax.in` dalam satu folder, lalu sebut foldernya.
+
+Di laptop:
+
+```bash
+cd ~/QE_automation
+mkdir -p cases/ws2
+cp /lokasi/ws2_*_relax.in cases/ws2/
+bash qe.sh init cases/ws2
+bash qe.sh dump cases/ws2
+bash qe.sh cases/ws2
+```
+
+Di HPC:
+
+```bash
+cd _scratch/arsy/QE_automation
+mkdir -p cases/ws2
+cp /lokasi/ws2_*_relax.in cases/ws2/
+bash qe.sh init cases/ws2
+bash qe.sh dump cases/ws2
+sbatch -p medium-small -t 3-00:00:00 qe.sh cases/ws2
+squeue -u $USER
+```
+
+Semua case dijalankan berurutan dalam satu job. Satu case yang gagal tidak
+menghentikan yang lain, dan di akhir dicetak ringkasan.
+
+Kalau tidak mau seluruh isi folder, sebut filenya satu per satu:
+
+```bash
+bash qe.sh cases/ws2/ws2_co2_B1_relax.in cases/ws2/ws2_h2s_B1_relax.in
+```
+
+## Memantau dan memeriksa
+
+```bash
+squeue -u $USER
+bash qe.sh check cases/mos2/mos2_relax.in
+```
+
+## Menggambar ulang tanpa mengulang perhitungan
+
+```bash
+cd cases/mos2
+nano mos2_plot.py
+python3 mos2_plot.py
+```
+
+## Kalau gagal di tengah jalan
+
+```bash
+bash qe.sh check cases/mos2/mos2_relax.in
+rm -rf cases/mos2/work cases/mos2/cache cases/mos2/logs
+bash qe.sh cases/mos2/mos2_relax.in
+```
 
 ---
 
-# 3. Penjelasan Tiap Perintah
+# Penjelasan
 
-## `mkdir -p cases/mos2`
+## Arti tiap perintah
 
-Membuat folder khusus untuk satu material. Seluruh file — input, output, data,
-gambar — akan berada di dalamnya.
+**`mkdir -p cases/mos2`** — folder untuk satu material. Semua file, input
+sampai gambar, berada di dalamnya.
 
-## `cp ... cases/mos2/`
-
-Menempatkan file input relax ke dalam folder tersebut.
-
-## `bash qe.sh init ...`
-
-**Membuat jalur band.**
-
-Sistem mengukur panjang rusuk dan sudut sel dari `CELL_PARAMETERS`,
-menyimpulkan jenis kisinya, lalu menulis `mos2_band.path` berisi rute titik
-simetri yang sesuai.
+**`bash qe.sh init ...`** — membuat jalur band. Sistem mengukur panjang rusuk
+dan sudut sel dari `CELL_PARAMETERS`, menyimpulkan jenis kisinya, lalu menulis
+`mos2_band.path`:
 
 ```
 Lattice measured from mos2_relax.in:
@@ -201,71 +206,62 @@ Band path written: cases/mos2/mos2_band.path
   0.0000000000  0.0000000000  0.0000000000   1                ! G
 ```
 
-**Periksa baris `->`.** Pastikan jenis kisi yang disimpulkan sesuai dengan
-material yang dimaksud. Bila tertulis "tetragonal" padahal materialnya
-heksagonal, berarti ada yang keliru pada `CELL_PARAMETERS`.
+Periksa baris `->`. Kalau tertulis "tetragonal" padahal materialnya heksagonal,
+berarti ada yang keliru di `CELL_PARAMETERS`. Jalur yang salah tidak
+menghasilkan error — grafiknya tetap keluar dan tampak wajar, tapi isinya bukan
+yang dimaksud. Karena itu langkah ini dipisah, supaya bisa diperiksa dulu.
 
-Jalur yang salah **tidak menghasilkan error** — grafiknya tetap keluar dan
-tampak wajar, tetapi isinya bukan yang dimaksud. Karena itu langkah ini
-dipisahkan, agar hasilnya dapat diperiksa lebih dulu.
+Wajib dijalankan. Tanpa `<case>_band.path`, pipeline berhenti di tahap 7 dari
+13. Kalau kisinya tidak dikenali, sistem menolak menebak dan meminta jalurnya
+ditulis manual. File `.path` yang sudah ada tidak pernah ditimpa.
 
-Bila jenis kisi tidak dikenali, sistem menolak menebak dan meminta jalur
-ditulis manual. File `.path` yang sudah ada tidak pernah ditimpa, sehingga
-jalur tulisan tangan selalu diutamakan.
+**`bash qe.sh dump ...`** — memeriksa pembacaan input. Gratis, beberapa detik,
+tanpa perhitungan. Cocokkan `NAT`, `NTYP`, `ECUTWFC`, `K_POINTS`, dan nama file
+pseudopotensial dengan yang dimaksud.
 
-## `bash qe.sh dump ...`
+Dua baris yang perlu diperhatikan:
 
-**Memeriksa pembacaan input.** Gratis, beberapa detik, tanpa perhitungan.
+- `note: ... using default ...` — ada parameter yang tidak ditulis di input dan
+  diisi otomatis. Pastikan nilai bawaannya memang sesuai.
+- `passthrough` — sistem mengenali 16 parameter utama; sisanya disalin apa
+  adanya ke tahap berikutnya. Kalau memakai `vdw_corr`, `nspin`, atau `nbnd`,
+  namanya harus muncul di baris `&SYSTEM passthrough`. Tulisan `(none)` berarti
+  tidak ada parameter tambahan, bukan error.
 
-Menampilkan parameter yang terbaca sistem. Cocokkan `NAT`, `NTYP`, `ECUTWFC`,
-`K_POINTS`, dan nama file pseudopotensial dengan yang dimaksud.
+Tidak wajib, tapi murah dan sering menyelamatkan.
 
-Dua hal yang perlu diperhatikan pada keluarannya:
-
-**Baris `note: ... using default ...`** — ada parameter yang tidak ditulis di
-input dan diisi otomatis. Pastikan nilai bawaannya memang sesuai.
-
-**Baris `passthrough`** — sistem mengenali 16 parameter utama; parameter di
-luar itu disalin apa adanya ke tahap berikutnya. Bila menggunakan `vdw_corr`,
-`nspin`, atau `nbnd`, namanya **harus** muncul di baris `&SYSTEM passthrough`.
-Tulisan `(none)` berarti tidak ada parameter tambahan, bukan error.
-
-## `bash qe.sh ...` / `sbatch qe.sh ...`
-
-**Menjalankan seluruh pipeline**, 12 tahap berurutan:
+**`bash qe.sh ...` / `sbatch qe.sh ...`** — menjalankan seluruh pipeline, 13
+tahap berurutan:
 
 | # | Tahap | Isinya |
 |---|---|---|
 | 1 | `parser` | membaca input |
 | 2 | `relax` | optimasi struktur |
 | 3 | `extract` | mengambil geometri hasil relaksasi |
-| 4–5 | `gen-scf`, `scf` | menghitung rapat muatan |
-| 6–8 | `gen-band`, `band`, `bandsx` | energi sepanjang jalur band |
-| 9–10 | `gen-nscf`, `nscf` | mesh k lebih rapat untuk DOS |
-| 11 | `dos` | menghasilkan data DOS |
-| 12 | `plot` | menggambar band dan DOS |
+| 4 | `cif` | menulis struktur sebelum dan sesudah relaksasi |
+| 5–6 | `gen-scf`, `scf` | menghitung rapat muatan |
+| 7–9 | `gen-band`, `band`, `bandsx` | energi sepanjang jalur band |
+| 10–11 | `gen-nscf`, `nscf` | mesh k lebih rapat untuk DOS |
+| 12 | `dos` | menghasilkan data DOS |
+| 13 | `plot` | menggambar band dan DOS |
 
-Setiap tahap mencetak waktu mulai, selesai, dan durasinya. Proses selesai bila
-muncul:
+Tiap tahap mencetak waktu mulai, selesai, dan durasinya. Selesai bila muncul
+`Workflow Finished Successfully`.
 
-```
-Workflow Finished Successfully
-```
+**`sbatch -p medium-small -t 3-00:00:00`** — partisi dan batas waktu. Tanpa itu
+kamu dapat partisi `short` dengan batas 24 jam. Sesuaikan lewat baris perintah,
+jangan mengedit `qe.sh`, karena file itu harus tetap identik di laptop dan HPC.
+Sepuluh case WS₂ dengan ~6,5 jam per case butuh sekitar 65 jam, jadi 3 hari.
+Batas yang benar-benar berlaku dicetak di kepala log.
 
-Beberapa material sekaligus dalam satu job:
+**`bash qe.sh check ...`** — menampilkan sampai tahap mana sebuah run berjalan,
+apa yang gagal, dan kenapa. Berguna terutama kalau job dibunuh batas waktu:
+log SLURM berhenti di tengah kalimat, sedangkan `check` menyebut tahap ke
+berapa yang terputus.
 
-```bash
-sbatch qe.sh cases/mos2/mos2_relax.in cases/ws2/ws2_relax.in
-```
+## Hasil
 
-Keduanya berjalan bergantian. Satu material yang gagal tidak menghentikan yang
-lain.
-
----
-
-# 4. Hasil
-
-Seluruhnya berada di dalam folder material:
+Semuanya di dalam folder material:
 
 ```
 cases/mos2/
@@ -273,65 +269,45 @@ cases/mos2/
 ├── mos2_dos.png           gambar DOS
 ├── mos2_band_dos.png      keduanya berdampingan, satu sumbu energi
 ├── mos2_plot.py           skrip yang menggambar ketiganya
-├── pwscf.bands.dat.gnu    data band
-└── pwscf.dos              data DOS
+├── mos2_initial.cif       struktur sebelum relaksasi
+├── mos2_relaxed.cif       struktur sesudah relaksasi
+├── mos2.bands.dat.gnu     data band
+└── mos2.dos               data DOS
 ```
 
-Pada semua gambar, **angka 0 pada sumbu tegak menandai E_Fermi**, ditampilkan
-sebagai garis putus-putus merah.
+Pada semua gambar, angka 0 di sumbu tegak menandai E_Fermi, digambar sebagai
+garis putus-putus merah.
+
+Kedua file CIF bisa langsung dibuka di VESTA untuk membandingkan struktur
+sebelum dan sesudah relaksasi. Simetrinya sengaja ditulis `P 1`, bukan ditebak
+dari koordinat hasil relaksasi — grup ruang yang ditebak menghasilkan CIF yang
+salah tanpa pesan apa pun. VESTA bisa mendeteksi simetrinya sendiri.
 
 ## Menyetel ulang gambar
 
-```bash
-cd cases/mos2
-nano mos2_plot.py
-python3 mos2_plot.py
-```
-
-Bagian atas skrip berisi blok pengaturan yang dapat diubah bebas:
+Bagian atas `mos2_plot.py` berisi blok pengaturan yang bebas diubah:
 
 ```python
 E_FERMI    = -2.0755
-EMIN, EMAX = -5.0, 5.0      # jendela energi, eV, relatif E_FERMI
+EMIN, EMAX = -5.0, 5.0
 LABELS     = ["G", "M", "K", "G"]
 DPI        = 300
 ```
 
-Menjalankan ulang skrip ini **tidak mengulang perhitungan DFT** — hanya membaca
+Menjalankan ulang skrip itu tidak mengulang perhitungan DFT — hanya membaca
 data yang sudah jadi, selesai dalam hitungan detik.
 
-> Untuk material bergap, sebaiknya `E_FERMI` diisi nilai **VBM** (puncak pita
-> valensi), bukan E_Fermi. Dengan smearing, E_Fermi ditempatkan di dekat tepi
-> pita, bukan di tengah gap.
->
-> Lebar gap juga sebaiknya dibaca dari data pita, bukan dari grafik DOS —
-> pelebaran pada DOS membuat gap terbaca lebih sempit dari seharusnya.
-
----
-
-# 5. Bila Terjadi Kegagalan
-
-```bash
-bash qe.sh check cases/mos2/mos2_relax.in
-```
-
-Menampilkan tahap mana yang berhasil dan mana yang gagal, disertai diagnosis
-penyebab beserta solusinya.
-
-Bila proses terhenti di tengah jalan (batas waktu, `scancel`, Ctrl-C),
-**bersihkan lebih dulu** sebelum mengulang:
-
-```bash
-rm -rf cases/mos2/{work,cache,logs}
-```
-
-Tanpa ini, proses berikutnya akan memakai sisa perhitungan yang belum selesai.
+Untuk material bergap, sebaiknya `E_FERMI` diisi nilai VBM (puncak pita
+valensi), bukan E_Fermi. Dengan smearing, E_Fermi ditempatkan di dekat tepi
+pita, bukan di tengah gap. Lebar gap juga sebaiknya dibaca dari data pita,
+bukan dari grafik DOS — pelebaran pada DOS membuat gap terbaca lebih sempit.
 
 ## Menjalankan satu tahap saja
 
 ```bash
-bash qe.sh scf  cases/mos2/mos2_relax.in
+bash qe.sh scf cases/mos2/mos2_relax.in
 bash qe.sh plot cases/mos2/mos2_relax.in
+bash qe.sh cif cases/mos2/mos2_relax.in
 ```
 
 Daftar lengkap tahap yang tersedia:
@@ -340,26 +316,68 @@ Daftar lengkap tahap yang tersedia:
 bash qe.sh
 ```
 
----
+## Yang diperiksa sistem
 
-# 6. Catatan Mesin
+Kalau salah satu tidak dipenuhi, sistem berhenti seketika dengan pesan yang
+menyebut penyebab dan solusinya, tanpa ada perhitungan yang terlanjur jalan.
 
-| | Laptop | Cluster |
+- Nama file, `ibrav = 0`, `CELL_PARAMETERS`, bentuk `K_POINTS`, parameter wajib
+- **Pseudopotensial ada di `pseudo_dir`** — diperiksa untuk semua case sekaligus
+  sebelum antre, karena pw.x baru menemukannya beberapa detik setelah job mulai,
+  yaitu setelah antre berjam-jam
+- **Dua case dalam satu folder tidak memakai `prefix` yang sama**
+- **Relaksasi benar-benar konvergen** — pw.x mencetak `JOB DONE.` walaupun BFGS
+  kehabisan langkah ionik, jadi ini diperiksa terpisah setelah relax selesai.
+  Kalau tidak konvergen, pipeline berhenti di tahap 2 dari 13, sebelum scf.
+  Cara melanjutkan: salin `ATOMIC_POSITIONS` terakhir dari output ke input,
+  naikkan `nstep`, jalankan lagi — jangan mulai dari nol.
+- **File hasil tidak lebih tua dari sumbernya** — kalau input diedit, sistem
+  membaca ulang otomatis. Kalau `<case>_band.path` diperbaiki lalu `band`
+  dijalankan langsung tanpa `gen-band`, sistem berhenti, karena pw.x akan
+  menyusuri jalur-k lama dan menghasilkan grafik yang rapi tapi salah.
+  Sebaliknya kalau kamu mengedit sendiri `<case>_scf.in`, editanmu yang
+  termuda, jadi tetap dipakai.
+
+## Yang tidak diperiksa sistem
+
+Bagian ini yang paling sering menimbulkan masalah: tidak ada error, perhitungan
+selesai dengan sukses, tapi hasilnya keliru.
+
+- **Konvergensi parameter.** Ketebalan vakum, kecukupan `ecutwfc`, kerapatan
+  mesh k, rasio `ecutrho/ecutwfc`. Nilai yang terlalu kecil menghasilkan
+  perhitungan yang selesai dengan sukses namun tidak bermakna. Uji konvergensi
+  dilakukan terpisah, sebelum memakai sistem ini.
+- **`nbnd` tidak dinaikkan otomatis.** Kalau tidak ditulis, QE memakai nilai
+  bawaan yang menyisakan sedikit pita konduksi, sehingga bagian atas grafik band
+  jadi kosong. Tulis `nbnd` di `&SYSTEM` bila perlu.
+- **Kebenaran jalur band.** Diperiksa mata sendiri lewat `init`, bukan oleh
+  sistem.
+
+## Kasus magnetik
+
+Kalau input menulis `nspin = 2`, `bands.x` dijalankan dua kali, sekali per kanal
+spin, dan grafik band menggambar keduanya: spin up garis penuh, spin down garis
+putus, warnanya sama dengan panel DOS di sebelahnya. Relevan untuk kasus NO₂.
+
+Kasus non-magnetik tidak berubah sama sekali.
+
+## Catatan mesin
+
+| | Laptop | HPC |
 |---|---|---|
 | Menjalankan | `bash qe.sh` | `sbatch qe.sh` |
 | Jumlah proses | core fisik, terdeteksi otomatis | dari alokasi SLURM |
 | `pw.x` | dari `PATH` | dari module |
 
-File `qe.sh`, `config.sh`, dan seluruh `lib/` **identik** di kedua mesin.
-Keduanya mendeteksi lingkungannya sendiri, bukan dikonfigurasi terpisah.
+File `qe.sh`, `config.sh`, dan seluruh `lib/` identik di kedua mesin. Keduanya
+mendeteksi lingkungannya sendiri, bukan dikonfigurasi terpisah.
 
-Bila cluster tidak memiliki matplotlib maupun gnuplot, tahap `plot` akan
-dilewati disertai pesan penjelasan — **perhitungan tetap dinyatakan berhasil**,
-hanya gambarnya yang tidak dibuat. Salin folder material ke laptop, lalu gambar
-di sana:
+Kalau HPC tidak punya matplotlib maupun gnuplot, tahap `plot` dilewati disertai
+pesan penjelasan, dan perhitungan tetap dinyatakan berhasil — hanya gambarnya
+yang tidak dibuat. Salin folder materialnya ke laptop lalu gambar di sana:
 
 ```bash
-scp -r <cluster>:_scratch/arsy/QE_automation/cases/mos2 ~/QE_automation/cases/
+scp -r <hpc>:_scratch/arsy/QE_automation/cases/mos2 ~/QE_automation/cases/
 cd ~/QE_automation
 bash qe.sh plot cases/mos2/mos2_relax.in
 ```
@@ -367,4 +385,4 @@ bash qe.sh plot cases/mos2/mos2_relax.in
 ---
 
 Dokumen lain: `README.md` menjelaskan cara kerja dan alasan rancangannya;
-`MAINTENANCE.md` ditujukan bagi siapa pun yang akan mengubah kodenya.
+`MAINTENANCE.md` untuk siapa pun yang akan mengubah kodenya.

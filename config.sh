@@ -139,6 +139,22 @@ DEFAULT_SMEARING="mv"
 DEFAULT_DEGAUSS="0.02"
 
 ##########
+# Relaxation
+##########
+#
+# Refuse to go on when the relax did not converge.
+#
+# pw.x prints JOB DONE. even when BFGS ran out of ionic steps, and the last
+# ATOMIC_POSITIONS block in that output is the last step it took, not a
+# minimum. Everything after - scf, bands, DOS, and any adsorption energy or
+# bond length read off them - would then describe a structure that is not a
+# stationary point, with no error anywhere to say so.
+#
+# 0 turns the refusal into a warning and continues. Only worth setting when
+# you already know why a case does not converge and want the numbers anyway.
+REQUIRE_RELAX_CONVERGED=1
+
+##########
 # DOS / NSCF
 ##########
 

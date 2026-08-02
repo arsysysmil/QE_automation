@@ -3,11 +3,21 @@
 #
 # Sourced by qe.sh. Not executable on its own.
 
+# One value out of the input, by key.
+#
+# The trailing comment is cut before anything else. Without that,
+# `ecutwfc = 60   ! Ry, converged` came through as the value "60   ! Ry
+# converged" (the comma stripped by the quote rule, so it was not even the
+# text the user wrote) and was copied verbatim into every generated input.
+# Fortran namelist reads tolerated it, so nothing ever broke - but `qe.sh
+# dump`, which exists to show what the parser sees, showed the wrong value,
+# and namelist_passthrough() below already stripped comments, so the two
+# halves of the parser disagreed about what a line means.
 get_param() {
     local key="$1"
     grep -iE "^[[:space:]]*${key}[[:space:]]*=" "$INPUT_ABS" \
         | head -1 \
-        | sed -E "s/^[^=]*=[[:space:]]*//; s/[',]//g; s/[[:space:]]+$//" \
+        | sed -E "s/^[^=]*=[[:space:]]*//; s/!.*//; s/[',]//g; s/[[:space:]]+$//" \
         || true
 }
 
@@ -67,6 +77,94 @@ CARDS_KEPT='HUBBARD|OCCUPATIONS'
 # without knowing which card comes next.
 CARDS_ALL='ATOMIC_SPECIES|ATOMIC_POSITIONS|K_POINTS|CELL_PARAMETERS|HUBBARD|OCCUPATIONS|CONSTRAINTS|ATOMIC_VELOCITIES|ATOMIC_FORCES|ADDITIONAL_K_POINTS|SOLVENTS'
 
+# The ATOMIC_SPECIES card of $INPUT_ABS, one species per line.
+#
+# Stops at a blank line OR at the next card header. Blank-line-only was too
+# fragile: an input whose ATOMIC_SPECIES card is followed directly by
+# ATOMIC_POSITIONS, with no blank line between them, had the whole positions
+# card swallowed into the species list - and the generated inputs then carried
+# a mangled ATOMIC_SPECIES that QE rejected with an error pointing nowhere near
+# the real cause.
+#
+# A function rather than inline in step_parser() because the pseudopotential
+# preflight needs the same list before any step runs, and two readers of one
+# card would eventually disagree about where it ends.
+atomic_species_block() {
+    awk -v any="^[[:space:]]*($CARDS_ALL)([[:space:]]|\\\\(|\\\\{|$)" '
+    /^[[:space:]]*ATOMIC_SPECIES[[:space:]]*$/ {flag=1; next}
+    flag && /^[[:space:]]*$/ {exit}
+    flag && $0 ~ any {exit}
+    flag {print}
+    ' "$INPUT_ABS"
+}
+
+# Where pw.x will look for pseudopotentials, as an absolute path.
+#
+# A relative pseudo_dir is resolved against the directory holding the input,
+# because that is where run_pw() cd's to before launching pw.x - not against
+# wherever qe.sh happened to be invoked from.
+pseudo_dir_abs() {
+    local dir
+    dir="$(get_param pseudo_dir)"
+
+    [[ -n "$dir" ]] || return 1
+    [[ "$dir" == /* ]] || dir="$(dirname "$INPUT_ABS")/$dir"
+
+    printf '%s' "$dir"
+}
+
+# Everything about this case's pseudopotentials that is not on disk, as a block
+# ready to print. Nothing at all when they are all there.
+#
+# Checked before the queue rather than by pw.x, which discovers it seconds into
+# a job that may have waited hours to start. The WS2 screening is the case that
+# makes it worth doing: twenty inputs whose pseudo_dir had to be rewritten by
+# hand when they moved between accounts, where one missed line costs a whole
+# queue wait to find out about.
+pseudo_problems() {
+    local input_abs="$1"
+    local dir upf sym mass rest
+    local -a missing=()
+
+    INPUT_ABS="$input_abs"
+
+    if ! dir="$(pseudo_dir_abs)"; then
+        printf '  %s\n    no pseudo_dir line in this input\n' "$(basename "$input_abs")"
+        return 0
+    fi
+
+    if [[ ! -d "$dir" ]]; then
+        printf '  %s\n    pseudo_dir : %s\n' "$(basename "$input_abs")" "$dir"
+        printf '    -> no such directory, or it cannot be read from this machine\n'
+        return 0
+    fi
+
+    while read -r sym mass upf rest; do
+        [[ -n "${upf:-}" ]] || continue
+        [[ -f "$dir/$upf" ]] || missing+=("$upf")
+    done < <(atomic_species_block)
+
+    (( ${#missing[@]} )) || return 0
+
+    printf '  %s\n    pseudo_dir : %s\n    missing    : %s\n' \
+        "$(basename "$input_abs")" "$dir" "${missing[*]}"
+}
+
+# Every pseudopotential file this case names, as absolute paths - so the
+# preflight can say how many distinct files it checked.
+pseudo_files_of() {
+    local input_abs="$1"
+    local dir upf sym mass rest
+
+    INPUT_ABS="$input_abs"
+    dir="$(pseudo_dir_abs)" || return 0
+
+    while read -r sym mass upf rest; do
+        [[ -n "${upf:-}" ]] || continue
+        printf '%s/%s\n' "$dir" "$upf"
+    done < <(atomic_species_block)
+}
+
 extract_cards() {
     local infile="$1"
 
@@ -93,16 +191,30 @@ announce_passthrough() {
 # Kept under a different name from the CACHE_VERSION the cache file itself
 # sets, because sourcing the cache would otherwise overwrite the value it is
 # about to be compared against.
-CACHE_VERSION_EXPECTED='3'
+CACHE_VERSION_EXPECTED='4'
 
 step_parser() {
     local PREFIX OUTDIR PSEUDO_DIR CALCULATION
     local IBRAV NAT NTYP ECUTWFC ECUTRHO
     local OCCUPATIONS SMEARING DEGAUSS CONV_THR MIXING_BETA CELL_DOFREE
+    local NSPIN NONCOLIN
     local ATOMIC_SPECIES_BLOCK K_POINTS_LINE K_POINTS_MODE EXTRA_CARDS_BLOCK
     local CONTROL_EXTRA_BLOCK SYSTEM_EXTRA_BLOCK ELECTRONS_EXTRA_BLOCK
 
-    PREFIX=$(get_param prefix);   [[ -z "$PREFIX" ]] && PREFIX="pwscf"
+    # An absent prefix defaults to the CASE NAME, not to QE's own 'pwscf'.
+    #
+    # bands.x and dos.x name their output after the prefix - <prefix>.dos,
+    # <prefix>.bands.dat.gnu - and so does the save directory inside outdir.
+    # With the old 'pwscf' default every case in a folder produced files of
+    # the same name, so a folder holding gra1 and gra2 ended up with one
+    # pwscf.dos: whichever ran last. The generated inputs were already named
+    # per case (gra1_scf.in, gra2_scf.in), which made the collision harder to
+    # notice, not less real. SETUP.md carried "one material, one folder" as a
+    # rule the user had to remember; deriving the prefix removes the rule.
+    #
+    # An input that sets prefix itself still wins - and qe.sh refuses to start
+    # when two cases in one directory would end up sharing one.
+    PREFIX=$(get_param prefix);   [[ -z "$PREFIX" ]] && PREFIX="$CASE_NAME"
     OUTDIR=$(get_param outdir);   [[ -z "$OUTDIR" ]] && OUTDIR="./work"
 
     PSEUDO_DIR=$(get_param pseudo_dir)
@@ -136,18 +248,16 @@ step_parser() {
     # Tells the nscf step whether this is a 2D slab or a normal 3D cell.
     CELL_DOFREE=$(get_param cell_dofree)
 
-    # Stops at a blank line OR at the next card header. Blank-line-only was
-    # too fragile: an input whose ATOMIC_SPECIES card is followed directly by
-    # ATOMIC_POSITIONS, with no blank line between them, had the whole
-    # positions card swallowed into the species list - and the generated
-    # inputs then carried a mangled ATOMIC_SPECIES that QE rejected with an
-    # error pointing nowhere near the real cause.
-    ATOMIC_SPECIES_BLOCK=$(awk -v any="^[[:space:]]*($CARDS_ALL)([[:space:]]|\\\\(|\\\\{|$)" '
-    /^[[:space:]]*ATOMIC_SPECIES[[:space:]]*$/ {flag=1; next}
-    flag && /^[[:space:]]*$/ {exit}
-    flag && $0 ~ any {exit}
-    flag {print}
-    ' "$INPUT_ABS")
+    # Read for information only - nspin and noncolin stay in SYSTEM_EXTRA and
+    # are emitted from there, exactly as before. They are named here because
+    # step_bandsx has to KNOW the calculation is spin-polarised: bands.x writes
+    # one spin channel per run and defaults to the first, so an nspin=2 case
+    # needs two passes. Deliberately NOT added to DROP_SYSTEM - dropping them
+    # from the passthrough would remove them from the generated inputs.
+    NSPIN=$(get_param nspin)
+    NONCOLIN=$(get_param noncolin)
+
+    ATOMIC_SPECIES_BLOCK=$(atomic_species_block)
 
     # The card's own mode word decides how the k-points may be handled later:
     # 'automatic' is a mesh that the nscf step can scale, 'gamma' is a single
@@ -322,6 +432,8 @@ CONV_THR='${CONV_THR}'
 MIXING_BETA='${MIXING_BETA}'
 
 CELL_DOFREE='${CELL_DOFREE}'
+NSPIN='${NSPIN}'
+NONCOLIN='${NONCOLIN}'
 
 ATOMIC_SPECIES=\$(cat <<'EOF_ATOMIC_SPECIES'
 ${ATOMIC_SPECIES_BLOCK}
@@ -373,6 +485,7 @@ step_dump() {
         ECUTWFC "$ECUTWFC" ECUTRHO "$ECUTRHO" OCCUPATIONS "$OCCUPATIONS" \
         SMEARING "$SMEARING" DEGAUSS "$DEGAUSS" CONV_THR "$CONV_THR" \
         MIXING_BETA "$MIXING_BETA" CELL_DOFREE "$CELL_DOFREE" \
+        NSPIN "${NSPIN:-}" NONCOLIN "${NONCOLIN:-}" \
         K_POINTS_MODE "${K_POINTS_MODE:-}" K_POINTS "$K_POINTS"
     echo "ATOMIC_SPECIES:"
     echo "$ATOMIC_SPECIES"

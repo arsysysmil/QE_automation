@@ -161,6 +161,12 @@ plot_collect_ticks() {
     PLOT_TICKS=()
     PLOT_LABELS=()
 
+    # An nspin=2 case ran bands.x once per channel, into _bandsx_up.out and
+    # _bandsx_dn.out. Both walk the same path, so either gives the same tick
+    # positions; the up one is taken. Without this the magnetic cases lost
+    # their k-point labels and fell back to numbering them.
+    [[ -f "$bandsx_out" ]] || bandsx_out="$INPUT_DIR/${CASE_NAME}_bandsx_up.out"
+
     [[ -f "$bandsx_out" ]] || return 0
 
     mapfile -t PLOT_TICKS < <(
@@ -240,6 +246,7 @@ import numpy as np
 # ------------------------------- settings --------------------------------
 CASE       = "${CASE_NAME}"
 BANDS_FILE = "${PLOT_BANDS_REL}"        # "" when bands.x has not run
+BANDS_DN   = "${PLOT_BANDS_DN_REL}"     # spin-down channel; "" unless nspin=2
 DOS_FILE   = "${PLOT_DOS_REL}"          # "" when dos.x has not run
 
 E_FERMI    = ${PLOT_EF}                 # ${PLOT_EF_SOURCE}
@@ -293,10 +300,21 @@ def read_dos(path):
 
 
 def draw_bands(ax):
-    for x, y in read_bands(BANDS_FILE):
-        ax.plot(x, y - E_FERMI, color=BAND_COLOR, lw=1.1)
+    # Only the first curve of each channel carries a label, or the legend would
+    # hold one entry per band.
+    for i, (x, y) in enumerate(read_bands(BANDS_FILE)):
+        ax.plot(x, y - E_FERMI, color=BAND_COLOR, lw=1.1,
+                label="spin up" if (i == 0 and BANDS_DN) else None)
+
+    if BANDS_DN:
+        for i, (x, y) in enumerate(read_bands(BANDS_DN)):
+            ax.plot(x, y - E_FERMI, color=DOWN_COLOR, lw=1.1, ls="--",
+                    label="spin down" if i == 0 else None)
 
     ax.axhline(0.0, color=FERMI_COLOR, ls="--", lw=0.9)
+
+    if BANDS_DN:
+        ax.legend(frameon=False, fontsize=8, loc="upper right")
 
     if TICKS:
         for t in TICKS[1:-1]:
@@ -430,6 +448,19 @@ plot_write_gnuplot() {
     local dos_dw=''
     plot_dos_is_spin && dos_dw='yes'
 
+    # Spin-resolved bands: a second plot line, the same two colours the DOS
+    # panel uses, and a key - without one the reader cannot tell which channel
+    # is which.
+    local band_key="" band_up_title="" band_dn_plot=""
+    if [[ -n "$PLOT_BANDS_DN_REL" ]]; then
+        band_key="set key on top right"$'\n'
+        band_up_title=' t "spin up"'
+        # A real newline after the continuation backslash, not the two
+        # characters \n - gnuplot needs the plot to actually continue on the
+        # next line.
+        band_dn_plot=", \\"$'\n'"     \"${PLOT_BANDS_DN_REL}\" u 1:(\$2-EF) w l lw 2 dt 2 lc rgb down_color t \"spin down\""
+    fi
+
     # Height of the tallest DOS peak *inside the energy window*.
     #
     # Needed because gnuplot autoscales the DOS axis over every row in the
@@ -487,8 +518,9 @@ set yrange [emin:emax]
 set xrange [${xmin}:${xmax}]
 set xtics (${xtics})
 ${arrows}set arrow from ${xmin},0 to ${xmax},0 nohead lc rgb fermi_color lw 2 dt 2 front
-plot "${PLOT_BANDS_REL}" u 1:(\$2-EF) w l lw 2 lc rgb band_color
+${band_key}plot "${PLOT_BANDS_REL}" u 1:(\$2-EF) w l lw 2 lc rgb band_color${band_up_title}${band_dn_plot}
 unset arrow
+unset key
 unset xtics
 set xtics
 EOF
@@ -540,8 +572,9 @@ set xlabel ""
 set xrange [${xmin}:${xmax}]
 set xtics (${xtics})
 ${arrows}set arrow from ${xmin},0 to ${xmax},0 nohead lc rgb fermi_color lw 2 dt 2 front
-plot "${PLOT_BANDS_REL}" u 1:(\$2-EF) w l lw 2 lc rgb band_color
+${band_key}plot "${PLOT_BANDS_REL}" u 1:(\$2-EF) w l lw 2 lc rgb band_color${band_up_title}${band_dn_plot}
 unset arrow
+unset key
 
 # right: DOS turned on its side, same energy range, no repeated axis label.
 # It starts at 0.75 rather than at the band panel's 0.72 so the two sets of
@@ -576,13 +609,47 @@ EOF
 step_plot() {
     require_cache
 
-    PLOT_BANDS_FILE="$INPUT_DIR/${PREFIX}.bands.dat.gnu"
-    PLOT_DOS_FILE="$INPUT_DIR/${PREFIX}.dos"
+    local data_prefix="$PREFIX"
+
+    # Migration: data written before an absent prefix defaulted to the case
+    # name is called pwscf.dos / pwscf.bands.dat.gnu. Those runs are finished
+    # and their figures should still be redrawable, so fall back to them - but
+    # only when this case has no data of its own, and only out loud. Delete
+    # this branch once no such folders are left.
+    if [[ ! -s "$INPUT_DIR/${PREFIX}.dos" && ! -s "$INPUT_DIR/${PREFIX}.bands.dat.gnu" \
+       && (   -s "$INPUT_DIR/pwscf.dos"   ||   -s "$INPUT_DIR/pwscf.bands.dat.gnu" ) ]]; then
+        data_prefix="pwscf"
+        echo "  note: no ${PREFIX}.* data here, but pwscf.* is present - plotting that."
+        echo "        It was written before an absent prefix defaulted to the case"
+        echo "        name. Re-running the pipeline will produce ${PREFIX}.* instead."
+    fi
+
+    PLOT_DOS_FILE="$INPUT_DIR/${data_prefix}.dos"
     PLOT_BANDS_REL=""
+    PLOT_BANDS_DN_REL=""
     PLOT_DOS_REL=""
 
-    [[ -s "$PLOT_BANDS_FILE" ]] && PLOT_BANDS_REL="${PREFIX}.bands.dat.gnu"
-    [[ -s "$PLOT_DOS_FILE"   ]] && PLOT_DOS_REL="${PREFIX}.dos"
+    # An nspin=2 case has one file per channel. Both are drawn, in the same two
+    # colours the DOS panel already uses, so the two halves of the combined
+    # figure finally describe the same calculation.
+    if [[ -s "$INPUT_DIR/${data_prefix}.bands.up.dat.gnu" ]]; then
+        PLOT_BANDS_REL="${data_prefix}.bands.up.dat.gnu"
+        [[ -s "$INPUT_DIR/${data_prefix}.bands.dn.dat.gnu" ]] && \
+            PLOT_BANDS_DN_REL="${data_prefix}.bands.dn.dat.gnu"
+
+        if [[ -z "$PLOT_BANDS_DN_REL" ]]; then
+            echo "  warning: ${data_prefix}.bands.up.dat.gnu is here but the spin-down"
+            echo "           file is not. The band panel will show spin up only, which"
+            echo "           is what this workflow used to do for every magnetic case."
+            echo "           Re-run the bandsx step to produce both."
+        fi
+    elif [[ -s "$INPUT_DIR/${data_prefix}.bands.dat.gnu" ]]; then
+        PLOT_BANDS_REL="${data_prefix}.bands.dat.gnu"
+    fi
+
+    PLOT_BANDS_FILE="${PLOT_BANDS_REL:+$INPUT_DIR/$PLOT_BANDS_REL}"
+
+    [[ -s "$PLOT_DOS_FILE"   ]] && PLOT_DOS_REL="${data_prefix}.dos"
 
     if [[ -z "$PLOT_BANDS_REL" && -z "$PLOT_DOS_REL" ]]; then
         echo "  nothing to plot: neither ${PREFIX}.bands.dat.gnu nor ${PREFIX}.dos"

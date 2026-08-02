@@ -21,19 +21,132 @@ which is what v1 got wrong, not the fact that it had several files.
 
     sbatch qe.sh case_relax.in                    # full pipeline
     sbatch qe.sh caseA_relax.in caseB_relax.in    # several cases, one job
+    sbatch qe.sh cases/gra                        # every case in that folder
 
     bash qe.sh parser case_relax.in    # run a single step, for debugging
     bash qe.sh dump   case_relax.in    # print everything the parser read
     bash qe.sh gen-scf case_relax.in
     bash qe.sh scf     case_relax.in
-    bash qe.sh check   case_relax.in   # which stages finished, and why not
+    bash qe.sh check   case_relax.in   # where the last run got to, and why
 
 A step name never ends in `_relax.in`, so both forms are unambiguous and any
 step accepts several cases (`qe.sh scf a_relax.in b_relax.in`).
 
+A **folder** argument stands for every `*_relax.in` inside it, in name order:
+one folder, one job, its cases one after another — the `run.sh` convention
+from the cluster, without the hand-written file list that goes stale. Adding a
+case to the folder adds it to the run. It is not recursive: the folder you
+name is the folder that runs, so `qe.sh cases` cannot become a week-long
+accident.
+
+Everything each case produces is named after that case — `gra1_scf.in`,
+`gra1.dos`, `gra1.bands.dat.gnu` — so a folder of cases keeps its results
+apart. An input that sets `prefix` itself still wins, and two cases in one
+folder that would end up sharing one are refused before anything starts.
+
 Several cases run one after another, each getting the whole allocation. Every
 input is validated before anything starts, a failing case does not stop the
-others, and a summary is printed at the end (exit code 1 if any failed).
+others, and a summary is printed at the end naming the step each failure
+stopped at. Exit code 1 if any failed.
+
+### The structure as CIF, before and after
+
+The `cif` step writes `<case>_initial.cif` and `<case>_relaxed.cif` from data
+already on disk - the input and the extracted geometry - so the relaxation can
+be looked at in VESTA rather than trusted. No MPI, milliseconds, and runnable
+on a finished case at any time:
+
+    bash qe.sh cif cases/mos2/mos2_relax.in
+
+Symmetry is written as `P 1` on purpose. A space group guessed from relaxed
+coordinates is a CIF that is wrong without saying so; viewers re-detect
+symmetry themselves, with a tolerance you control.
+
+### Nothing derived is older than what it came from
+
+The input is parsed into a cache, the relax output into a geometry, and those
+into the generated scf/band/nscf inputs. Each of those is a snapshot, and each
+is now checked against what it was taken from. Edit the input and the cache is
+re-parsed; re-run the relax and the geometry is re-extracted; edit
+`<case>_band.path` and the `band` step stops rather than walking the old
+k-path. What you wrote last wins.
+
+Hand-editing a generated input still works - your edit is the newest thing
+there, so nothing complains about it.
+
+### Walltime is written down
+
+`#SBATCH --time` is set in `qe.sh` and the limit actually in force is printed
+in the run header. Size it per job on the command line rather than editing the
+file, since flags beat `#SBATCH`:
+
+    sbatch -p medium-small -t 3-00:00:00 qe.sh cases/ws2_TS
+
+### Spin-polarised cases get both channels
+
+bands.x writes one spin channel per run and defaults to the first, so an
+`nspin=2` case used to produce a band figure of spin up only - beside a DOS
+panel that showed both, because dos.x writes both without being asked. The
+bandsx step now runs once per channel and the figures draw both, up solid and
+down dashed, in the same two colours the DOS panel uses.
+
+Unpolarised cases are unchanged: one pass, `<prefix>.bands.dat`, same file
+names as before.
+
+### Pseudopotentials are checked before the queue
+
+`pseudo_dir` and every `.upf` file named in `ATOMIC_SPECIES` are verified for
+all cases before the first one starts. pw.x would find a missing file a few
+seconds into a job that queued for hours; this finds it in the second before
+submission, and reports every case at once so a folder of ten is fixed in one
+pass.
+
+Fatal only for the steps that launch pw.x. Preparing inputs on a laptop, where
+`pseudo_dir` names a path that only exists on the cluster, prints a note and
+carries on - `parser`, `dump`, `gen-scf`, `plot` and `check` do not need the
+files.
+
+### A relax that did not converge is refused
+
+pw.x prints `JOB DONE.` whether or not the ionic minimisation converged — a
+BFGS run that exhausts `nstep` finishes cleanly and leaves its last step in the
+output. The `relax` and `extract` steps therefore require the
+`bfgs converged in N scf cycles` line that QE prints for both `relax` and
+`vc-relax`, and stop with the reason and a list of what usually causes it when
+it is absent. Without that, everything downstream — scf, bands, DOS, and any
+adsorption energy or bond length read off them — describes a structure that is
+not a minimum, with nothing anywhere to say so.
+
+Checked in `extract` as well as in `relax`, so it also covers a relax run
+outside this workflow and copied in. `REQUIRE_RELAX_CONVERGED=0` in
+`config.sh` downgrades it to a warning.
+
+The largest remaining force component is compared against the run's own
+`forc_conv_thr`, and reported when it is over. For a `vc-relax` that is the
+final scf QE runs at the relaxed cell with recalculated G-vectors, so exceeding
+it there means the structure is converged in the basis it started from rather
+than in the correct one — Pulay stress, whose remedy is to re-run `vc-relax`
+from the final structure until the cell stops moving.
+
+### When a run is cut short
+
+Each step is recorded in `logs/<case>.status.tsv` *before* it starts, so a
+step with no outcome written after it is a step that was interrupted — true
+even under SIGKILL, which walltime and the OOM killer both use and no trap can
+catch. `qe.sh check` turns that into a sentence:
+
+    Last run of 'gra3' (job 412899, started 2026-08-02 01:52:03):
+       1/12  parser    OK       0h0m3s
+       2/12  relax     RUNNING  started 2026-08-02 01:52:06
+
+    INTERRUPTED: step 2/12 (relax) started at 2026-08-02 01:52:06 and never
+      finished. The process was killed while it was running - walltime,
+      scancel, out of memory, or a node failure - so nothing after it ran.
+      What killed it:
+        sacct -j 412899 --format=JobID,State,ExitCode,Elapsed,Timelimit,MaxRSS
+
+Without it the only evidence is a Slurm log that stops mid-sentence, possibly
+hours of pw.x output away from the step header that would name the stage.
 
 MEASURED, graphene + MoS2 in one job:
 
@@ -43,9 +156,9 @@ MEASURED, graphene + MoS2 in one job:
 Overlapping is available via CASES_PARALLEL in config.sh but is not
 recommended here - see the note in that file.
 
-Steps hand state to each other through `cache/parser.cache` next to the input
-file, so any single step can be re-run on its own after an earlier run created
-it. `qe.sh` with no arguments prints the full step list.
+Steps hand state to each other through `cache/<case>.parser.cache` next to the
+input file, so any single step can be re-run on its own after an earlier run
+created it. `qe.sh` with no arguments prints the full step list.
 
 ### Off the cluster
 
@@ -108,6 +221,7 @@ success; the data files are the deliverable.
     lib/generate.sh                    writing the scf / band / nscf inputs
     lib/run.sh                         steps that launch pw.x / bands.x / dos.x
     lib/init.sh                        lattice detection + band path
+    lib/cif.sh                         the structure as CIF, before and after
     lib/plot.sh                        band / DOS figures from the finished data
     SETUP.md                           what an input must satisfy to be accepted
     MAINTENANCE.md                     what is fixed, deliberate, and still open
@@ -128,9 +242,13 @@ Per case, next to the input file:
 
     <case>_relax.in                    your input
     <case>_band.path                   REQUIRED for the band step (see below)
-    cache/parser.cache                 parsed input values
-    cache/structure.in                 relaxed geometry
+    <case>_initial.cif                 structure before the relax
+    <case>_relaxed.cif                 structure after it
+    cache/<case>.parser.cache          parsed input values
+    cache/<case>.structure.in          relaxed geometry
+    logs/<case>.status.tsv             which step ran, and how it ended
     <prefix>.bands.dat.gnu             band data      (bands.x)
+    <prefix>.bands.{up,dn}.dat.gnu     band data per spin channel, nspin=2
     <prefix>.dos                       DOS data       (dos.x)
     <case>_band.png                    figures        (plot)
     <case>_dos.png

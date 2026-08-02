@@ -57,8 +57,19 @@ setup_case() {
 
     CACHE_DIR="$INPUT_DIR/cache"
     LOGS_DIR="$INPUT_DIR/logs"
-    STRUCTURE_FILE="$CACHE_DIR/structure.in"
-    CACHE_FILE="$CACHE_DIR/parser.cache"
+
+    # Per case, not per directory.
+    #
+    # These were cache/parser.cache and cache/structure.in - one pair for the
+    # whole folder. With one material per folder that was invisible; with a
+    # folder of cases it means gra1, gra2 and gra3 all write the same two
+    # files, and the last one to parse wins. A full pipeline happened to
+    # survive it because each case parses and then immediately consumes its
+    # own cache, but `qe.sh parser <folder>` followed later by
+    # `qe.sh gen-scf <folder>` would have generated all three scf inputs from
+    # gra3's parameters, silently, and CASES_PARALLEL > 1 would have raced.
+    STRUCTURE_FILE="$CACHE_DIR/${CASE_NAME}.structure.in"
+    CACHE_FILE="$CACHE_DIR/${CASE_NAME}.parser.cache"
 
     RELAX_IN="$INPUT_ABS"
     RELAX_OUT="$INPUT_DIR/${CASE_NAME}_relax.out"
@@ -76,6 +87,155 @@ setup_case() {
 format_duration() {
     local secs="$1"
     printf '%dh%dm%ds' $((secs/3600)) $((secs%3600/60)) $((secs%60))
+}
+
+#############################
+# Where a run got to
+#############################
+#
+# A job killed by the scheduler - walltime, scancel, OOM, a node dropping out -
+# gets SIGKILL, which no trap can catch and which leaves the output stream
+# ending mid-sentence. Before this file existed there was nothing on disk
+# saying which of the twelve steps was in flight when that happened: the last
+# line of slurm-<id>.out might be hours of pw.x output away from the step
+# header, and for a multi-case run the summary never printed at all.
+#
+# So the state is written to disk *before* each step starts, not after it
+# finishes. A step whose RUNNING line has no OK/FAILED line after it is a step
+# that was interrupted, and that is true no matter how violently the process
+# died. status_report() below turns that into a sentence.
+#
+# Cheap enough to do unconditionally: one short append per step, against steps
+# that take minutes to hours.
+
+STATUS_FILE=""
+
+# Appends rather than truncates, so re-running one step to redo a figure does
+# not erase the record of the twelve-step run that produced the data. Each run
+# opens with a '# run' line and status_report() reads only the last block.
+status_begin() {
+    local total="$1"
+
+    STATUS_FILE="$LOGS_DIR/${CASE_NAME}.status.tsv"
+
+    {
+        printf '# run\n'
+        printf '# case\t%s\n'    "$CASE_NAME"
+        printf '# job\t%s\n'     "${SLURM_JOB_ID:-manual}"
+        printf '# started\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf '# steps\t%s\n'   "$total"
+    } >> "$STATUS_FILE"
+}
+
+# index total name RUNNING|OK|FAILED|INTERRUPTED [duration]
+status_mark() {
+    [[ -n "$STATUS_FILE" ]] || return 0
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$1" "$2" "$3" "$4" "$(date '+%Y-%m-%d %H:%M:%S')" "${5:-}" \
+        >> "$STATUS_FILE"
+}
+
+# The step a case is sitting on, as "5/12 scf", or nothing if there is no
+# status file. Used by the multi-case summary, which runs in the parent shell
+# where the failing case's LOGS_DIR is out of scope.
+status_last_step() {
+    local input_abs="$1"
+    local f
+    local case_name
+    case_name="$(basename "$input_abs")"; case_name="${case_name%_relax.in}"
+    f="$(dirname "$input_abs")/logs/${case_name}.status.tsv"
+
+    [[ -f "$f" ]] || return 0
+    grep -v '^#' "$f" | tail -1 | awk -F'\t' 'NF { printf "%s/%s %s", $1, $2, $3 }'
+}
+
+# The whole history of the last run of this case: every step, its outcome, and
+# an explicit verdict when the last step never finished.
+status_report() {
+    local f="$LOGS_DIR/${CASE_NAME}.status.tsv"
+
+    [[ -f "$f" ]] || return 0
+
+    # Only the most recent run: everything after the last '# run' line.
+    local block
+    block="$(awk '/^# run$/ { buf = ""; next } { buf = buf $0 "\n" } END { printf "%s", buf }' "$f")"
+    [[ -n "$block" ]] || return 0
+
+    local case_name job started total
+    case_name="$(awk -F'\t' '$1=="# case"    {print $2}' <<<"$block")"
+    job="$(awk      -F'\t' '$1=="# job"     {print $2}' <<<"$block")"
+    started="$(awk  -F'\t' '$1=="# started" {print $2}' <<<"$block")"
+    total="$(awk    -F'\t' '$1=="# steps"   {print $2}' <<<"$block")"
+
+    echo "Last run of '$case_name' (job ${job:-?}, started ${started:-?}):"
+
+    # One line per step. A RUNNING line followed by an OK/FAILED line for the
+    # same step is just the pair around a step that ran, so only the outcome is
+    # shown; a RUNNING line with nothing after it is the interesting case.
+    awk -F'\t' '
+        /^#/ { next }
+        NF < 4 { next }
+        {
+            idx = $1; tot = $2; name = $3; state = $4; when = $5; dur = $6
+            if (state == "RUNNING") {
+                pending_idx = idx; pending_tot = tot
+                pending_name = name; pending_when = when
+                next
+            }
+            printf "  %2s/%-2s  %-9s %-8s %s\n", idx, tot, name, state, dur
+            pending_idx = ""
+        }
+        END {
+            if (pending_idx != "")
+                printf "  %2s/%-2s  %-9s %-8s started %s\n",
+                       pending_idx, pending_tot, pending_name, "RUNNING", pending_when
+        }
+    ' <<<"$block"
+
+    local last state
+    last="$(grep -v '^#' <<<"$block" | tail -1)"
+    state="$(awk -F'\t' '{print $4}' <<<"$last")"
+
+    case "$state" in
+        RUNNING)
+            local idx name when
+            idx="$(awk  -F'\t' '{print $1}' <<<"$last")"
+            name="$(awk -F'\t' '{print $3}' <<<"$last")"
+            when="$(awk -F'\t' '{print $5}' <<<"$last")"
+            echo ""
+            echo "INTERRUPTED: step $idx/$total ($name) started at $when and never"
+            echo "  finished. The process was killed while it was running - walltime,"
+            echo "  scancel, out of memory, or a node failure - so nothing after it ran."
+            if [[ -n "$job" && "$job" != "manual" ]]; then
+                echo "  What killed it:"
+                echo "    sacct -j $job --format=JobID,State,ExitCode,Elapsed,Timelimit,MaxRSS"
+            fi
+            echo "  To resume, re-run the steps from $name onwards; the finished ones"
+            echo "  above left their outputs in place."
+            ;;
+        FAILED)
+            local idx name
+            idx="$(awk  -F'\t' '{print $1}' <<<"$last")"
+            name="$(awk -F'\t' '{print $3}' <<<"$last")"
+            echo ""
+            echo "STOPPED: step $idx/$total ($name) failed. The reason was printed when"
+            echo "  it happened; the per-output diagnosis below repeats what can still"
+            echo "  be read off the files."
+            ;;
+        OK)
+            local idx
+            idx="$(awk -F'\t' '{print $1}' <<<"$last")"
+            if [[ "$idx" == "$total" ]]; then
+                echo ""
+                echo "COMPLETE: all $total steps finished."
+            else
+                echo ""
+                echo "PARTIAL: stopped cleanly after step $idx/$total (a single-step run,"
+                echo "  or a pipeline that was not asked to go further)."
+            fi
+            ;;
+    esac
+    echo ""
 }
 
 # Largest divisor of $1 that does not exceed $2. Used to fit the configured
@@ -150,11 +310,98 @@ check_done() {
     echo "SUCCESS : $outfile"
 }
 
+#############################
+# Nothing derived may be older than what it was derived from
+#############################
+#
+# Steps hand state to each other through files: the input is parsed into
+# cache/<case>.parser.cache, the relax output into cache/<case>.structure.in,
+# and those two (plus <case>_band.path) into the generated scf/band/nscf
+# inputs. Every one of those is a snapshot, and nothing checked whether the
+# thing it was taken from had changed since.
+#
+# Measured, before this existed:
+#
+#     ecutwfc = 60  in the input   ->  <case>_scf.in says 60     correct
+#     (edit the input to 120)
+#     qe.sh gen-scf                ->  <case>_scf.in says 60     silently stale
+#
+# No warning, exit 0, "SCF input generated". And that is exactly the loop
+# README recommends for debugging: run one step, look, fix the input, run
+# again. The same shape as the config.sh-overwrites-smearing bug and the
+# dropped-passthrough bug - runs fine, different physics.
+#
+# The rule is one line: a derived file must not be OLDER than its sources.
+# Which also means hand-editing a generated input is still respected - your
+# edit is the newest thing there, so nothing complains about it.
+#
+# mtime, not a checksum: it needs no extra state, and "strictly newer" means
+# files written in the same second do not trip it, which keeps a fast pipeline
+# quiet.
+
+# The sources that are newer than the derived file, by name. Empty if it is
+# up to date, or if it does not exist yet (that is a different problem, and
+# the caller reports it).
+newer_sources() {
+    local derived="$1"; shift
+    local src
+
+    [[ -f "$derived" ]] || return 0
+
+    for src in "$@"; do
+        [[ -f "$src" ]] || continue
+        [[ "$src" -nt "$derived" ]] && printf '%s ' "$(basename "$src")"
+    done
+
+    return 0
+}
+
+# For the generated pw.x inputs. Refuses rather than regenerating: these sit
+# next to the input file and are plausibly hand-tuned, so silently rewriting
+# one would throw away work. The fix is one command and it is named.
+assert_generated_fresh() {
+    local generated="$1" regen_step="$2"; shift 2
+    local stale
+
+    stale="$(newer_sources "$generated" "$@")"
+    [[ -n "$stale" ]] || return 0
+
+    echo "ERROR: $(basename "$generated") is older than: $stale"
+    echo "       It was generated from an earlier version of those, so running it"
+    echo "       now would compute something other than what they currently say -"
+    echo "       with no error anywhere, which is the whole reason this is checked."
+    echo "       FIX: bash qe.sh $regen_step $INPUT_NAME"
+    echo "       (if you edited $(basename "$generated") by hand on purpose, it is"
+    echo "        already newer than its sources and this would not have fired)"
+    exit 1
+}
+
 require_cache() {
+    # Migration: cache/parser.cache and cache/structure.in were shared by every
+    # case in a folder before they were named per case. A folder written by the
+    # older layout still has them, and re-parsing is both cheap and the only
+    # correct answer - the old file may have been written by a different case.
+    # Delete this branch once no such folders are left.
+    if [[ ! -f "$CACHE_FILE" && -f "$CACHE_DIR/parser.cache" ]]; then
+        echo "  note: found cache/parser.cache from the older shared-cache layout."
+        echo "        It may have been written by a different case in this folder,"
+        echo "        so it is not trusted - re-parsing into $(basename "$CACHE_FILE")."
+        step_parser
+    fi
+
     if [[ ! -f "$CACHE_FILE" ]]; then
         echo "ERROR: $CACHE_FILE not found - run the 'parser' step first."
         exit 1
     fi
+
+    # Regenerated rather than refused: the cache lives under cache/, is nobody's
+    # hand-written file, and re-reading the input is the cheapest step there is.
+    if [[ "$INPUT_ABS" -nt "$CACHE_FILE" ]]; then
+        echo "  note: $INPUT_NAME has changed since $(basename "$CACHE_FILE") was"
+        echo "        written - re-parsing it, so what you edited is what runs"
+        step_parser
+    fi
+
     source "$CACHE_FILE"
 
     # A cache from an older qe.sh has no CONTROL_EXTRA/SYSTEM_EXTRA fields.
@@ -173,6 +420,16 @@ require_structure() {
         echo "ERROR: $STRUCTURE_FILE not found - run the 'extract' step first."
         exit 1
     fi
+
+    # Same reasoning as the cache: cache/<case>.structure.in is internal state,
+    # and re-reading the relax output costs nothing. A relax that was re-run
+    # leaves a newer .out, and the geometry every later step uses has to come
+    # from it rather than from the run before.
+    if [[ "$RELAX_OUT" -nt "$STRUCTURE_FILE" ]]; then
+        echo "  note: $(basename "$RELAX_OUT") is newer than"
+        echo "        $(basename "$STRUCTURE_FILE") - re-extracting the geometry"
+        step_extract
+    fi
 }
 
 #############################
@@ -188,8 +445,23 @@ require_structure() {
 step_check() {
     local out label found=0 failed=0
 
+    # CALCULATION comes from the cache, and check() deliberately does not
+    # require one - it has to work on a folder whose run died before the
+    # parser, and on output copied down from somewhere else. Read it from the
+    # input when the cache has not been sourced.
+    local calc="${CALCULATION:-}"
+    [[ -n "$calc" ]] || calc="$(get_param calculation)"
+
+    # Where the run got to, before the per-file scan. A file-by-file report
+    # answers "which outputs are good"; it cannot answer "why did it stop
+    # after four of them", because a step that was killed before writing
+    # anything leaves no file to scan. That is what the status file is for.
+    status_report
+
     for out in "$RELAX_OUT" "$SCF_OUT" "$BAND_OUT" \
                "$INPUT_DIR/${CASE_NAME}_bandsx.out" \
+               "$INPUT_DIR/${CASE_NAME}_bandsx_up.out" \
+               "$INPUT_DIR/${CASE_NAME}_bandsx_dn.out" \
                "$NSCF_OUT" \
                "$INPUT_DIR/${CASE_NAME}_dos.out"; do
         [[ -f "$out" ]] || continue
@@ -198,7 +470,40 @@ step_check() {
         label="$(basename "$out")"
 
         if grep -q "JOB DONE." "$out"; then
-            printf 'SUCCESS : %s\n' "$label"
+            # JOB DONE. is not the whole story for a relax: pw.x prints it for
+            # a BFGS run that ran out of ionic steps too, and the geometry in
+            # that file is the last step taken rather than a minimum. So the
+            # headline for the relax output is the convergence verdict, not the
+            # exit status - "SUCCESS" above "NOT CONVERGED" would be the same
+            # mixed message this check exists to remove.
+            #
+            # Reported rather than asserted: `check` is a post-mortem, and it
+            # should describe what is on disk instead of refusing to.
+            if [[ "$out" == "$RELAX_OUT" && "${calc,,}" == *relax* ]]; then
+                relax_convergence_scan "$out"
+
+                if [[ -n "$RELAX_CONVERGED_LINE" ]]; then
+                    printf 'SUCCESS : %s\n' "$label"
+                    printf '          %s\n' "$RELAX_CONVERGED_LINE"
+                    relax_final_force_note "$calc" | sed 's/^  /          /'
+                else
+                    printf 'NOT DONE: %s\n' "$label"
+                    printf '          pw.x finished cleanly (JOB DONE) but the geometry did not converge.\n'
+                    if (( RELAX_MAXSTEPS )); then
+                        printf '          BFGS reached the maximum number of ionic steps.\n'
+                    else
+                        printf '          No bfgs result in this output at all.\n'
+                    fi
+                    printf '          What is in this file is the last step taken, not a minimum -\n'
+                    printf '          anything computed from it describes a structure that is not one.\n'
+                    [[ -n "$RELAX_MAX_FORCE" ]] && \
+                        printf '          largest force component %s Ry/au, threshold %s\n' \
+                               "$RELAX_MAX_FORCE" "${RELAX_FORCE_THRESHOLD:-?}"
+                    failed=$(( failed + 1 ))
+                fi
+            else
+                printf 'SUCCESS : %s\n' "$label"
+            fi
         else
             printf 'FAILED  : %s\n' "$label"
             diagnose_failure "$out"

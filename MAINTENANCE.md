@@ -5,8 +5,8 @@
 deliberate, and which are still open. `README.md` next to this file describes
 what the workflow *does*; this file describes the state it is in.
 
-Last entry: **2026-07-29**. Running `qe.sh` version: see `md5sum qe.sh` against
-the table at the bottom.
+Last entry: **2026-08-02**, synced to the cluster the same day. Running
+`qe.sh` version: see `md5sum qe.sh` against the table at the bottom.
 
 ---
 
@@ -466,6 +466,351 @@ E_F under smearing sits wherever the occupation integral puts it, which is
 near a band edge rather than mid-gap. Setting `E_FERMI` to the VBM in the
 generated plot script is the right move for a figure meant for publication.
 
+### 1.12 A folder of cases, and the four collisions that made it unsafe (2026-08-02)
+
+`qe.sh <folder>` now stands for every `*_relax.in` inside it, in name order —
+the `run.sh` convention from the cluster, without the hand-written file list
+that goes stale. Non-recursive on purpose: `qe.sh cases` must not become a
+full-week accident.
+
+Adding it exposed four things that were **already broken** and only invisible
+because one folder had held one material:
+
+1. **`cache/parser.cache` and `cache/structure.in` were per folder.** Three
+   cases in one folder wrote the same two files, last one wins. A full
+   pipeline survived it by accident (each case parses and immediately consumes
+   its own cache), but `qe.sh parser <folder>` followed later by
+   `qe.sh gen-scf <folder>` would have written all three scf inputs from the
+   last case's parameters, silently. Now `<case>.parser.cache` and
+   `<case>.structure.in`.
+2. **An absent `prefix` defaulted to `pwscf`.** `bands.x`/`dos.x` name their
+   output after the prefix, so every case produced one `pwscf.dos`. It now
+   defaults to the case name. `SETUP.md` used to carry "one material, one
+   folder" as a rule to remember; deriving the prefix removes the rule.
+3. **An explicit shared `prefix` still collides**, and no default can fix that
+   — so `qe.sh` refuses to start, naming both files. Checked with the parser's
+   own `get_param()`, not a second grep: two readers of one key is the
+   divergence this project keeps having to repair.
+4. **`logs/status.tsv` and `logs/pipeline.out` were per folder** for the same
+   reason. Now per case.
+
+Migration, to be deleted when no old folders are left: `require_cache()`
+re-parses when it finds a legacy `cache/parser.cache`, and `step_plot()` falls
+back to `pwscf.*` data — out loud in both cases. `cases/mos2`, `cases/si` and
+`cases/phosphorene` are folders in that state.
+
+**One thing the shims do not cover.** A folder written by the old layout holds
+`work/pwscf.save`, while a regenerated `<case>_scf.in` now asks for
+`work/<case>.save`. Redrawing figures is fine — that is what the `plot`
+fallback is for — but re-running `band` or `nscf` on such a folder without
+re-running `scf` first will not find the charge density. Re-run from `scf`, or
+delete `work/` and run the pipeline. Nothing is lost either way: the `.out`
+files and the `pwscf.*` data are never touched.
+
+### 1.13 Where a killed run got to (2026-08-02)
+
+A job killed by the scheduler gets SIGKILL, which no trap can catch. The log
+just stopped mid-sentence, hours of pw.x output away from the last step
+header, and for a multi-case run the summary never printed at all.
+
+`logs/<case>.status.tsv` records each step **before** it starts, so a RUNNING
+line with nothing after it *is* the interruption, however violent the death.
+`qe.sh check` reads it and says which of the twelve steps was in flight, when
+it started, and what to run to find out why. Traps on TERM/INT add a message
+when the signal is catchable; the EXIT trap records a step that ended with
+`exit 1`, which is how most step functions report failure — a `return`-based
+scheme would have missed all of them.
+
+Appends rather than truncates: re-running `plot` to redo a figure must not
+erase the record of the twelve-step run that produced the data. Only the block
+after the last `# run` line is reported.
+
+The traps are installed **inside** the per-case subshell. Bash resets a
+parent's traps in a subshell, so an EXIT trap set outside would never fire for
+the step that actually failed. Verified before relying on it.
+
+### 1.14 The exit code was always 0 (2026-08-02)
+
+`FAILED` was set on a failing case from the day multi-case support was written
+and then never read — the script's last command was the wall-time `echo`.
+`README` promised "exit code 1 if any failed"; `sacct` showed `COMPLETED 0:0`
+for a job half of whose cases had died, and `sbatch --dependency=afterok`
+would have launched the next stage on it. Now `exit "$FAILED"`, and the
+summary names the step each failed case stopped at.
+
+### 1.15 `get_param()` kept the trailing comment (2026-08-02)
+
+`ecutwfc = 60   ! Ry, converged` parsed to the value `60   ! Ry converged` —
+not even the text as written, since the quote rule had eaten the comma — and
+was copied into every generated input. Fortran namelist reads tolerated it, so
+nothing ever broke; but `qe.sh dump`, which exists to show what the parser
+sees, showed the wrong value, and `namelist_passthrough()` already stripped
+comments, so the two halves of the parser disagreed about what a line means.
+
+### 1.16 A relax that never converged was reported as SUCCESS (2026-08-02)
+
+`check_done()` looks for `JOB DONE.` and nothing else. pw.x prints it for a
+BFGS run that ran out of ionic steps too — it was asked for `nstep` steps and
+gave `nstep` steps, so from the program's side nothing went wrong:
+
+    The maximum number of steps has been reached.
+    End of BFGS Geometry Optimization
+    JOB DONE.
+
+`step_extract()` then took the **last** `ATOMIC_POSITIONS` block in the file —
+the final BFGS step, forces still above threshold — and labelled it "relaxed
+positions from <case>_relax.out". scf, bands, nscf and dos all ran on a
+structure that is not a stationary point, and `qe.sh check` said `SUCCESS`.
+Only the `vc-*` branch warned, and only about a missing final *cell*; the
+`relax` inputs the MoS2 and WS2 work actually uses had no check at all.
+
+Verified before fixing: a hand-written `.out` with the text above and no
+`Begin final coordinates` produced `SUCCESS : nc_relax.out` and a
+`cache/nc.structure.in` holding the unconverged geometry.
+
+`assert_relax_converged()` now requires the `bfgs converged in N scf cycles`
+line that QE prints for both `relax` and `vc-relax` — confirmed present in all
+seven `cases/*/*_relax.out`. Called from `step_relax` (so a full pipeline stops
+at 2/12 rather than after the scf) **and** from `step_extract`, because the
+relax may have been run outside this workflow: a hand-written `run.sh` on the
+cluster, or output copied down from one, which is exactly how the WS2 screening
+was run. `step_check` reports it too, under a `NOT DONE:` headline rather than
+`SUCCESS` — "SUCCESS" above "NOT CONVERGED" is the mixed message this exists to
+remove.
+
+`REQUIRE_RELAX_CONVERGED=0` in `config.sh` downgrades it to a warning and
+continues. Default 1.
+
+**Two arithmetic traps in reading that force, both found by real data rather
+than by review.** First, compare on the largest force COMPONENT, not on
+`Total force`. QE's
+criterion is per component ("all components of all forces smaller than
+`forc_conv_thr`"); `Total force` is the norm of the whole 3N-vector, larger
+than any component by roughly sqrt(3N). The first version of this check
+compared the norm and reported phosphorene — four atoms, every component
+~0.0007 against a 1.0E-03 threshold, norm 0.002004 — as unconverged. Any cell
+with a few atoms would have cried wolf.
+
+Second, stop at the force **decomposition**. QE prints `The non-local contrib.
+to forces`, `The core correction contribution to forces` and friends *between*
+the force listing and the `Total force` line, each with its own per-atom lines.
+Those terms are individually huge and mostly cancel; reading them as forces
+reported **37.07 Ry/au** for a production MoS2+NO2 run whose largest real
+component was 0.0018. It did not change any verdict - that comes from the
+`bfgs converged` line - but it corrupted every number reported alongside it and
+would have raised a Pulay warning on converged runs that was pure arithmetic.
+The laptop's test outputs happen not to print the decomposition, so this
+survived local testing and was caught the first time the code met cluster data.
+
+Side finding, kept as a warning rather than an error: `cases/mos2` converges
+(`bfgs converged in 6 scf cycles`) and then QE's `Final scf calculation at the
+relaxed structure` — where the G-vectors are recalculated for the new cell —
+comes back with a largest component of **0.0137 Ry/au, 13.7x the threshold**.
+The structure is converged in the basis it started from and not in the correct
+one: Pulay stress. Expected for a test case with a deliberately low cutoff, but
+it is the reason a single `vc-relax` is not a converged answer — the remedy is
+to re-run it from the final structure until the cell stops moving. Now printed
+whenever it happens.
+
+### 1.17 Pseudopotentials are checked before the queue, not by pw.x (2026-08-02)
+
+`step_parser()` checked that a `pseudo_dir` line existed and was not empty.
+Nothing checked that the directory was there, or that the `.upf` files named in
+`ATOMIC_SPECIES` were in it. pw.x finds that out a few seconds into a job that
+may have queued for hours, and `diagnose_failure()` could only explain it
+afterwards.
+
+The WS2 screening is why it matters: twenty inputs whose `pseudo_dir` had to be
+rewritten by hand when they moved from `ataqiyya` to `ahma080`, where one
+missed line costs a whole queue wait to discover. With folder mode it
+multiplies - ten cases in a folder, ten failures in a row.
+
+Checked in the same preflight pass as the prefix collision, for every case
+before the first one starts, so a folder of ten is fixed in one go rather than
+one queue wait at a time.
+
+**Fatal only for the steps that launch pw.x** (`MPI_STEPS`, plus `all`).
+Preparing inputs on a laptop is normal, and there `pseudo_dir` names a cluster
+path that is *supposed* to be absent; refusing `qe.sh dump` or `qe.sh gen-scf`
+over it would make the tool an obstacle where it is meant to help. Those steps
+print a note and carry on.
+
+A relative `pseudo_dir` resolves against the directory holding the input,
+because that is where `run_pw()` cd's to - not against wherever `qe.sh` was
+invoked from.
+
+`atomic_species_block()` was factored out of `step_parser()` for this: the
+preflight needs the same card before any step runs, and two readers of one card
+would eventually disagree about where it ends.
+
+### 1.18 `qe.sh <folder>` was read as a step name (fixed 2026-08-02)
+
+Found by testing the documented form after writing it. The step-vs-input test is
+
+    if [[ "$1" != *_relax.in ]]; then STEP="$1"; shift; fi
+
+and a directory does not end in `_relax.in` either, so `qe.sh cases/gra` - the
+bare form README and SETUP.md both give as *the* way to use folder mode - set
+`STEP="cases/gra"`, shifted the only argument away, and died with "no input
+file given". Every test written for §1.12 had passed an explicit step name
+(`qe.sh parser cases/gra`), so none of them touched it.
+
+Now a directory is treated as an input unless it is also a known step name.
+
+### 1.19 bands.x wrote spin up only for nspin=2 (fixed 2026-08-02)
+
+bands.x writes ONE spin channel per run and `spin_component` defaults to 1.
+`step_bandsx()` never set it, so for a spin-polarised case the band figure
+showed spin up only - while the DOS panel beside it showed both channels,
+because dos.x writes both without being asked. The two halves of
+`<case>_band_dos.png` described different calculations and nothing said so.
+
+This sat in §3 as an open item with the note "not hit yet: no nspin=2 case has
+gone through this workflow". That is no longer true, and by a wide margin:
+**30 of the project's own 104 production inputs have `nspin = 2`** - the NO2
+adsorption cases, where the spin splitting is the physics being reported. (The
+same sweep found all 104 use `vdw_corr = 'DFT-D3'`, which is what §1.2 rescued,
+and all 104 use ONCV, so the 4x default ecutrho is correct for every one of
+them.)
+
+Now `step_bandsx()` runs bands.x once per channel when `NSPIN=2`:
+
+    <prefix>.bands.up.dat   spin_component = 1   <case>_bandsx_up.{in,out}
+    <prefix>.bands.dn.dat   spin_component = 2   <case>_bandsx_dn.{in,out}
+
+`lib/plot.sh` draws both, in the two colours the DOS panel already uses - up
+solid, down dashed - with a key, and warns when only the up file is present
+(which is what every magnetic case produced before this).
+
+**Unpolarised runs are untouched**: same single pass, same
+`<prefix>.bands.dat`, same `<case>_bandsx.out`. Existing cases and their
+finished data keep working, verified against all seven in `cases/`.
+
+`noncolin` takes the single-pass path: the channels are not separable there and
+`spin_component` means nothing to bands.x.
+
+`plot_collect_ticks()` falls back to `<case>_bandsx_up.out` for the tick
+positions; without that the magnetic cases lost their k-point labels and fell
+back to numbering them.
+
+`nspin` and `noncolin` are now named fields in `parser.cache` (CACHE_VERSION 4)
+because step_bandsx has to *know*. They are deliberately NOT added to
+DROP_SYSTEM - they still flow to the generated inputs through the §1.2
+passthrough, and dropping them there would remove them from the calculation.
+Verified: `mag_scf.in` still carries `nspin = 2` and
+`starting_magnetization(1) = 0.3`.
+
+### 1.20 Derived files could be older than their sources (fixed 2026-08-02)
+
+Steps hand state to each other through files, and no step checked whether the
+thing it was reading had been superseded. Measured before the fix:
+
+    ecutwfc = 60 in the input   ->  <case>_scf.in says 60      correct
+    (edit the input to 120)
+    qe.sh gen-scf               ->  <case>_scf.in says 60      stale, silent
+
+Exit 0, "SCF input generated", no note. That is precisely the loop README
+recommends for debugging - run one step, look, fix the input, run again - so
+the recommended workflow was the one that broke.
+
+Once stated as "nothing derived may be older than what it came from", it is
+four cases, not one:
+
+| source | derived | before |
+|---|---|---|
+| `<case>_relax.in` | `cache/<case>.parser.cache` | stale, silent |
+| `<case>_relax.out` | `cache/<case>.structure.in` | stale, silent |
+| cache + structure | `<case>_scf.in`, `<case>_nscf.in` | stale, silent |
+| cache + structure + `<case>_band.path` | `<case>_band.in` | stale, silent |
+
+The last is the dangerous one: fix the k-path, run `band` without `gen-band`,
+and pw.x walks the OLD path. A clean band structure of the wrong thing, which
+is the failure README section 3 exists to prevent - reintroduced through a
+different door.
+
+**Internal state regenerates; generated inputs refuse.** `cache/` holds nobody's
+hand-written file and re-reading costs nothing, so `require_cache()` re-parses
+and `require_structure()` re-extracts, each saying so. The `<case>_*.in` files
+sit next to the input and are plausibly hand-tuned, so `step_scf`/`step_band`/
+`step_nscf` stop and name the command to run rather than overwriting work.
+
+Hand-edited generated inputs still run: the edit makes the file the newest
+thing there, so the check does not fire. Verified - an `nbnd = 200` added by
+hand to `<case>_scf.in` survives and the step proceeds.
+
+mtime, not checksums: no extra state to keep, and "strictly newer" means files
+written inside the same second do not trip it, which keeps a fast pipeline
+quiet.
+
+### 1.21 No `--time`, and the partition was invisible (fixed 2026-08-02)
+
+The `#SBATCH` header had no `--time` at all, so the walltime was whatever
+default the partition carries - set by the cluster admins, absent from this
+file, and free to change without notice. A job that passes it is SIGKILLed;
+§1.13 explains what that looks like from the inside.
+
+The project's own hand-written `run.sh` for WS2 sets `--time=3-00:00:00`
+explicitly, so the risk was already understood there and only `qe.sh` was
+missing it. The header also says `--partition=short` while the MoS2 and WS2
+work runs on `medium-small`, which means a bare `sbatch qe.sh` gets neither the
+partition nor the limit those jobs actually use.
+
+Now `--time=24:00:00` is written down, deliberately modest and documented as a
+starting point rather than a recommendation, and the run header prints the
+partition and limit the scheduler is really enforcing (`squeue -h -j $JOBID -o
+'%P|%l'`) so the number is on the first screen of the log. Sizing per job is
+done on the command line - flags beat `#SBATCH`, and this file must stay
+byte-identical across the three copies:
+
+    sbatch -p medium-small -t 3-00:00:00 qe.sh cases/ws2_TS
+
+Ten WS2 cases at ~6.5 h each is ~65 h against a 72 h cap - worth watching, and
+now visible rather than assumed.
+
+### 1.22 `cif` — the structure as a file you can open (added 2026-08-02)
+
+A new step between `extract` and `gen-scf`, writing two files per case:
+
+    <case>_initial.cif    the geometry as written in <case>_relax.in
+    <case>_relaxed.cif    the geometry pw.x converged to
+
+Both come from data the workflow already had - the input, and the
+`cache/<case>.structure.in` that `step_extract()` produces - so it reads no
+wavefunctions, needs no MPI, and runs on a finished case at any time. In the
+pipeline it costs milliseconds.
+
+**Symmetry is P 1, always.** Guessing a space group from relaxed coordinates is
+how a CIF comes out subtly wrong with nothing to say so, and every viewer worth
+using re-detects symmetry itself with a tolerance the user can see. Same
+reasoning as the band path: refuse to guess rather than produce a
+plausible-looking answer.
+
+Units are converted rather than assumed. Every input in this project uses
+`CELL_PARAMETERS (angstrom)` with `ATOMIC_POSITIONS {crystal}`, where the job
+is a reformat - but the repo is public and README's own verification section
+describes converting inputs written for other workflows, so `bohr`, `alat`,
+`alat=<n>` and cartesian positions are handled too. Cartesian positions need
+the lattice inverted to get fractional coordinates; that is done in the awk
+rather than waved away.
+
+`crystal_sg` positions are refused: they are symmetry-generated, and expanding
+them is exactly the guessing this step avoids.
+
+Species labels are QE's, not CIF's: `Mo1`, `S_up`, `Fe2` all mean an element
+plus a tag. Everything from the first digit or underscore on is dropped for
+`_atom_site_type_symbol`, and the per-element index is regenerated. `if_pos`
+constraint flags trailing a position line are ignored.
+
+Verified beyond "it produced a file": the emitted cell lengths, cell volume and
+cartesian interatomic distances were reconstructed from the CIF in numpy and
+compared against `cache/mos2.structure.in` - agreement to 1e-8 A. The three
+unit paths (cartesian angstrom, cartesian bohr, bohr cell) were round-tripped
+from known fractional coordinates and come back exact. A 51-atom WS2+NO2 input
+gives `W16 S32 N1 O2`.
+
+`step_cif` is fail-soft per file: a case whose relax has not finished still
+gets its initial CIF, and says why the relaxed one is missing.
+
 ## 2. Deliberate, not bugs
 
 - **`CASES_PARALLEL > 1` is experimental and slower here** (45–51 min vs 3 min
@@ -504,13 +849,7 @@ generated plot script is the right move for a figure meant for publication.
    `average.x` are declared in `config.sh` but never invoked. Work function is
    currently done outside this workflow by
    `../mos2/work_function/run_workfunction.sh`. (Plotting is done — §1.10.)
-5. **`bands.x` only ever writes spin-up bands.** `step_bandsx` does not set
-   `spin_component`, and its default is 1. For an `nspin=2` case the band
-   figure is therefore spin-up only, with nothing saying so — the DOS panel of
-   the same figure *does* show both channels, because `dos.x` writes both
-   without being asked. Fix is to run `bands.x` twice with
-   `spin_component=1,2` into two `filband` names and have `lib/plot.sh` draw
-   both. Not hit yet: no `nspin=2` case has gone through this workflow.
+5. ~~**`bands.x` only ever writes spin-up bands.**~~ Fixed 2026-08-02, §1.19.
 4. **The graphene case has no `gra_band.path`.** README's "Verified" section
    describes a full 11-step graphene run, but `../graphene/` holds only
    `gra_relax.in`, so re-running it stops at step 6 until a path file is
@@ -664,9 +1003,27 @@ GitHub, precisely so there is no "private copy" to drift out of sync.
 | 2026-07-29 | `lib/generate.sh` | `24593dbbda2328c03fcffe8d7d4e010f` | passthrough + extra cards |
 | 2026-07-29 | `lib/init.sh` | `f5f807d05a9fb1e794ef2e3c5441ce40` | §1c, lattice classification + `orc_2d`/`tet_2d` |
 | 2026-07-29 | `lib/plot.sh` | `b5769335c90615e588606e91de2924ee` | §1.10 + §1.11 (E_F now from the nscf) |
+| 2026-08-02 | `qe.sh` | `5582fd822a0a4c3da1a1db3c72ab9645` | §1.22 `cif` step registered |
+| ~~2026-08-02~~ | ~~`qe.sh`~~ | ~~`e121b13419a5973f3405bdf96215f8d0` | §1.21 --time + partition/limit in the header |
+| ~~2026-08-02~~ | ~~`qe.sh`~~ | ~~`ec5d5573c0c069c2cad459d4f4a68cad` | §1.17 pseudopotential preflight, §1.18 folder-vs-step |
+| ~~2026-08-02~~ | ~~`qe.sh`~~ | ~~`4926762dc73f641428431806fdd786dd`~~ | §1.12 folder mode + prefix preflight, §1.13 status/traps, §1.14 exit code |
+| 2026-08-02 | `lib/common.sh` | `38da33a4beaaeef57b0af67756d23bab` | §1.20 freshness checks, auto re-parse / re-extract |
+| ~~2026-08-02~~ | ~~`lib/common.sh`~~ | ~~`125669e18d0716e08d4b57467b23f9ec` | §1.19 check scans both bandsx outputs |
+| ~~2026-08-02~~ | ~~`lib/common.sh`~~ | ~~`d3b466471d1d255291c6435b9332a5ee` | §1.12 per-case cache/status paths + legacy migration, §1.13 status file, `check` reports it |
+| 2026-08-02 | `lib/parser.sh` | `812f3fb82a2b07c95f8d48a4dddea25b` | §1.19 NSPIN/NONCOLIN named, CACHE_VERSION 4 |
+| ~~2026-08-02~~ | ~~`lib/parser.sh`~~ | ~~`b6a29b2009048e3264c54b6058f2e1f3` | §1.17 `atomic_species_block()` / `pseudo_problems()` factored out |
+| ~~2026-08-02~~ | ~~`lib/parser.sh`~~ | ~~`69b11c268b37168c79db4839a1fed556`~~ | §1.12 prefix defaults to the case name, §1.15 comment stripping |
+| 2026-08-02 | `lib/cif.sh` | `b30d33b7d144824901e227dc29ebc5ef` | §1.22 new file |
+| 2026-08-02 | `lib/plot.sh` | `ebfcd4ed755ac4145f354419b3f2bea0` | §1.19 both spin channels drawn, both engines |
+| ~~2026-08-02~~ | ~~`lib/plot.sh`~~ | ~~`479fb06da5badd09bdb9b1851cfeff7e` | §1.12 `pwscf.*` fallback for folders written by the old layout |
+| 2026-08-02 | `lib/structure.sh` | `427f622e0274b5c68941e049fe6100d4` | §1.16 max-force reader stops at the force decomposition (found against cluster data) |
+| ~~2026-08-02~~ | ~~`lib/structure.sh`~~ | ~~`babffb0d19d79e39f5718ae8d2db6e00` | §1.16 `assert_relax_converged()` + the max-component force note |
+| 2026-08-02 | `lib/run.sh` | `f943975ece275fd6b588297269b9dbbd` | §1.20 scf/band/nscf refuse a stale generated input |
+| ~~2026-08-02~~ | ~~`lib/run.sh`~~ | ~~`1ab765b7956a88ae39cb5d4530b49ab7` | §1.19 bands.x once per spin channel |
+| ~~2026-08-02~~ | ~~`lib/run.sh`~~ | ~~`2725140f2e2394b07190e606a0a826ba` | §1.16 `step_relax` asserts its own result |
+| 2026-08-02 | `config.sh` | `93c39e456c516e65a3a2354e9beaec3f` | §1.16 `REQUIRE_RELAX_CONVERGED` |
 
-`lib/common.sh`, `lib/run.sh` and `lib/structure.sh` are unchanged since
-2026-07-27.
+`lib/generate.sh` and `lib/init.sh` are unchanged since 2026-07-29.
 
 **`qe.sh`, `config.sh` and every `lib/` file must be byte-identical on the
 cluster, the laptop and GitHub** — only `MAINTENANCE.md` differs, and only in

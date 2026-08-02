@@ -16,10 +16,17 @@ These copies exist and they are NOT all in sync:
 
 | Copy | State |
 |---|---|
-| `QE_automation/` on the cluster | **authoritative** |
-| laptop `~/QE_automation/` | mirror of this one, added 2026-07-27. `qe.sh`, `config.sh` and `lib/` are byte-identical to the cluster's and must stay that way (§1.6) — it is a deployment, not a fork. Local runs live in `cases/`. |
-| the v1 directory beside it | v1, twelve files, **retired 2026-07-27**. Everything it did is in the current layout, including `script/check_job.sh` which came back as the `check` step (§1b). Kept only as a historical reference: it still has the vc-relax cell bug of §1.1 and none of the fixes below. Do not run it and do not develop there. |
-| this repository | up to date as of 2026-07-27 (PRs #1 and #2). Code files identical to the cluster's; **only `MAINTENANCE.md` differs**, and only in §5, which is generalised there because the repo is public. Never publish the account or folder names from §5. |
+| `QE_automation/` on the cluster | where the work actually runs. Synced 2026-08-02. |
+| laptop `~/QE_automation/` | the only laptop copy, and the git repository. `qe.sh`, `config.sh` and `lib/` are byte-identical to the cluster's and must stay that way (§1.6) — check with `md5sum`, a difference is a bug, not a setting. Local runs live in `cases/`, which is gitignored. |
+| the v1 directory beside the cluster one | v1, twelve files, **retired 2026-07-27**. Everything it did is in the current layout, including `script/check_job.sh` which came back as the `check` step (§1b). Kept only as a historical reference: it still has the vc-relax cell bug of §1.1 and none of the fixes below. Do not run it and do not develop there. |
+
+`MAINTENANCE.md` used to be the one file that differed between copies. It no
+longer does: §5 was rewritten to be generic everywhere, so sync it wholesale
+like any other file. Still never write third-party account or folder names into
+it — see §5.
+
+As of 2026-08-02 the laptop is on branch `input-validation-and-cif`, committed
+but not pushed; `main` is at the state before §1.12.
 
 If a future session is asked to "fix the QE workflow", check which of these the
 files being looked at belong to before changing anything.
@@ -251,7 +258,7 @@ error — see §2. That is the residual risk when moving to a new material.
 ## 1b. Layout: why lib/, and how to add a stage
 
 v1 was eleven files, v2 collapsed them into one, and this is the third shape:
-a thin `qe.sh` plus `lib/`. That is not a swing back to v1 — the two things
+a thin `qe.sh` plus eight `lib/` files. That is not a swing back to v1 — the two things
 that made v1 wrong are still gone.
 
 What actually broke v1 was never the file count:
@@ -284,7 +291,7 @@ back is only the browsability: ~80-390 lines per file, one concern each.
 1. write `step_<name>()` in whichever `lib/` file it belongs to
 2. add `<name>` to `PIPELINE_STEPS` in `qe.sh`, where it runs
 
-The step numbers (`3/11`) are counted from that list, so nothing needs
+The step numbers (`4/13`) are counted from that list, so nothing needs
 renumbering, and there is no second list of step names to keep in sync — the
 old `run_one_step()` and the validation `case` both enumerated them, and
 forgetting the second gave "unknown step" for a function that existed.
@@ -571,7 +578,7 @@ Verified before fixing: a hand-written `.out` with the text above and no
 `assert_relax_converged()` now requires the `bfgs converged in N scf cycles`
 line that QE prints for both `relax` and `vc-relax` — confirmed present in all
 seven `cases/*/*_relax.out`. Called from `step_relax` (so a full pipeline stops
-at 2/12 rather than after the scf) **and** from `step_extract`, because the
+at 2/13 rather than after the scf) **and** from `step_extract`, because the
 relax may have been run outside this workflow: a hand-written `run.sh` on the
 cluster, or output copied down from one, which is exactly how the WS2 screening
 was run. `step_check` reports it too, under a `NOT DONE:` headline rather than
@@ -830,30 +837,76 @@ gets its initial CIF, and says why the relaxed one is missing.
 
 ## 3. Still open
 
-1. **`nbnd` is never raised for the band/nscf steps.** Whatever the input
-   declares is now passed through (§1.2), but if the input declares nothing,
-   QE's default (~1.2 × nelec/2) applies and leaves few conduction bands. The
-   MoS2 project hit the extreme version of this (`nbnd = 120` against ~430
-   electrons). Consider `BAND_NBND` / `NSCF_NBND` knobs in `config.sh`.
-2. **No `work/` reset before a stage.** `mos2/band/run_h2s_only.sh` had to add
+Ordered by how much they cost, not by how hard they are.
+
+1. **`ibrav != 0` is not converted.** The biggest barrier to anyone else using
+   this. Almost every input from a tutorial, a paper or Materials Project uses
+   `celldm` rather than an explicit `CELL_PARAMETERS` card, so using this
+   workflow starts with a hand conversion — the one manual copy step the tool
+   otherwise exists to remove, and one nothing checks. `ibrav` 1–14 are closed
+   formulas; reading `celldm` and generating the card would change who can use
+   this from "inputs written for it" to "QE inputs".
+
+2. **No automated tests.** ~4000 lines of code and ~2000 of documentation with
+   nothing that runs itself. Everything is verified by hand, which is how two
+   bugs shipped inside a single day of work in §1.16 and were caught only by
+   real cluster data (the force-decomposition misread) and by trying the
+   documented command (§1.18). For a tool whose job is now to *refuse* things,
+   an untested refusal is worse than no refusal. §4 lists the manual checks;
+   freezing them into `tests/run.sh` is the obvious next step.
+
+3. **A job cut short cannot be resumed.** `logs/<case>.status.tsv` (§1.13) now
+   records which steps finished, so the information needed is already on disk —
+   skipping steps whose outputs exist would be a small change. Ten WS2 cases at
+   ~6.5 h each is ~65 h against a 72 h cap, so this is not hypothetical.
+
+4. **`nbnd` is never raised for the band/nscf steps.** Whatever the input
+   declares is passed through (§1.2), but if the input declares nothing, QE's
+   default (~1.2 × nelec/2) applies and leaves few conduction bands. The MoS2
+   project hit the extreme version (`nbnd = 120` against ~430 electrons).
+   Consider `BAND_NBND` / `NSCF_NBND` knobs in `config.sh`.
+
+5. **`bandsx` must not be re-run after `nscf`.** All four pw.x stages share one
+   `outdir` and `prefix`, so by the time the pipeline finishes, the
+   wavefunctions in `work/<prefix>.save` are the nscf ones. Running `bandsx`
+   again then produces a "band structure" over the nscf mesh — quietly wrong.
+   README says any step can be re-run on its own; that is true of every step but
+   this one. Either detect it (the `.xml` in the save dir records the
+   calculation) or say so in the docs. Currently neither.
+
+6. **No `work/` reset before a stage.** `mos2/band/run_h2s_only.sh` had to add
    `rm -rf work; mkdir -p work` for a GPFS `mkdir` race across 64 ranks; that
    mitigation never made it here. Related: `setup_case()` hardcodes
-   `mkdir -p "$INPUT_DIR/work"` even when the input's `outdir` is something
-   else (e.g. `work_pristine` in `../mos2/work_function/`).
+   `mkdir -p "$INPUT_DIR/work"` even when the input's `outdir` is something else.
+   A job killed part-way also leaves a half-written `work/` that the next run
+   reuses — clear it by hand: `rm -rf <case_dir>/{work,cache,logs}`.
 
-   This also means a job killed part-way (time limit, scancel) leaves a
-   half-written `work/` that the next run reuses. Until this is fixed, clear
-   it by hand before re-running a case that was interrupted:
-   `rm -rf <case_dir>/{work,cache,logs}`.
-3. **PDOS and work function are not implemented.** `projwfc.x`/`pp.x`/
+7. **The 2D test is `c/a > 2.0`.** `classify_lattice()` treats a tall cell as a
+   slab and drops k_z from the path. Correct for the monolayers this project
+   runs, wrong for genuinely layered 3D crystals: graphite (c/a = 2.7) and bulk
+   2H-MoS2 (c/a = 3.9) would both lose the Γ–A dispersion that decides MoS2's
+   indirect-to-direct gap transition. The honest test is the spread of atomic z
+   coordinates against c, not the axis ratio.
+
+8. **`runlogs/` sweep races concurrent jobs.** The sweep at the top of `qe.sh`
+   moves every `slurm-*.out` except its own, so two jobs running at once means
+   one moves the other's open log. Cosmetic — the writing continues into the
+   moved file — but confusing, and this project does run two jobs per account.
+
+9. **PDOS and work function are not implemented.** `projwfc.x`/`pp.x`/
    `average.x` are declared in `config.sh` but never invoked. Work function is
-   currently done outside this workflow by
-   `../mos2/work_function/run_workfunction.sh`. (Plotting is done — §1.10.)
-5. ~~**`bands.x` only ever writes spin-up bands.**~~ Fixed 2026-08-02, §1.19.
-4. **The graphene case has no `gra_band.path`.** README's "Verified" section
-   describes a full 11-step graphene run, but `../graphene/` holds only
-   `gra_relax.in`, so re-running it stops at step 6 until a path file is
-   copied from `template/`. `../_v2test/graphene/` has both.
+   currently done outside this workflow.
+
+10. **The graphene case has no `gra_band.path`.** README's "Verified" section
+    describes a full 13-step graphene run, but that directory holds only
+    `gra_relax.in`, so re-running it stops at step 7 until a path file is
+    copied from `template/`. `_v2test/graphene/` has both.
+
+11. **`convergence NOT achieved` in an scf has no diagnosis.** pw.x aborts and
+    `check_done()` catches it, but `diagnose_failure()` has no branch for it, so
+    the user gets 40 raw lines rather than a hint about `mixing_beta`,
+    `conv_thr` or `diagonalization`. It is the second most common failure after
+    a malformed input.
 
 ---
 
@@ -895,7 +948,7 @@ Two traps with `interactive`, both hit on 2026-07-27:
 
 ### 4.1 What the 2026-07-27 fixes were actually verified against
 
-Three cases, full 11-step pipeline each, in `../_v2test/`. Submitted to the
+Three cases, full pipeline each, in `../_v2test/`. Submitted to the
 `interactive` partition (`sbatch -p interactive -t 00:40:00 qe.sh ...`) because
 `short` was 48/48 allocated with a 4.5 h estimated start — worth remembering,
 a 3-minute validation does not have to wait for `short`.
@@ -1003,27 +1056,19 @@ GitHub, precisely so there is no "private copy" to drift out of sync.
 | 2026-07-29 | `lib/generate.sh` | `24593dbbda2328c03fcffe8d7d4e010f` | passthrough + extra cards |
 | 2026-07-29 | `lib/init.sh` | `f5f807d05a9fb1e794ef2e3c5441ce40` | §1c, lattice classification + `orc_2d`/`tet_2d` |
 | 2026-07-29 | `lib/plot.sh` | `b5769335c90615e588606e91de2924ee` | §1.10 + §1.11 (E_F now from the nscf) |
-| 2026-08-02 | `qe.sh` | `5582fd822a0a4c3da1a1db3c72ab9645` | §1.22 `cif` step registered |
-| ~~2026-08-02~~ | ~~`qe.sh`~~ | ~~`e121b13419a5973f3405bdf96215f8d0` | §1.21 --time + partition/limit in the header |
-| ~~2026-08-02~~ | ~~`qe.sh`~~ | ~~`ec5d5573c0c069c2cad459d4f4a68cad` | §1.17 pseudopotential preflight, §1.18 folder-vs-step |
-| ~~2026-08-02~~ | ~~`qe.sh`~~ | ~~`4926762dc73f641428431806fdd786dd`~~ | §1.12 folder mode + prefix preflight, §1.13 status/traps, §1.14 exit code |
-| 2026-08-02 | `lib/common.sh` | `38da33a4beaaeef57b0af67756d23bab` | §1.20 freshness checks, auto re-parse / re-extract |
-| ~~2026-08-02~~ | ~~`lib/common.sh`~~ | ~~`125669e18d0716e08d4b57467b23f9ec` | §1.19 check scans both bandsx outputs |
-| ~~2026-08-02~~ | ~~`lib/common.sh`~~ | ~~`d3b466471d1d255291c6435b9332a5ee` | §1.12 per-case cache/status paths + legacy migration, §1.13 status file, `check` reports it |
-| 2026-08-02 | `lib/parser.sh` | `812f3fb82a2b07c95f8d48a4dddea25b` | §1.19 NSPIN/NONCOLIN named, CACHE_VERSION 4 |
-| ~~2026-08-02~~ | ~~`lib/parser.sh`~~ | ~~`b6a29b2009048e3264c54b6058f2e1f3` | §1.17 `atomic_species_block()` / `pseudo_problems()` factored out |
-| ~~2026-08-02~~ | ~~`lib/parser.sh`~~ | ~~`69b11c268b37168c79db4839a1fed556`~~ | §1.12 prefix defaults to the case name, §1.15 comment stripping |
+| 2026-08-02 | `qe.sh` | `5582fd822a0a4c3da1a1db3c72ab9645` | §1.12–§1.14, §1.17, §1.18, §1.21, §1.22 — folder mode, preflights, status, exit code, --time, cif |
+| 2026-08-02 | `config.sh` | `93c39e456c516e65a3a2354e9beaec3f` | §1.16 REQUIRE_RELAX_CONVERGED |
+| 2026-08-02 | `lib/common.sh` | `38da33a4beaaeef57b0af67756d23bab` | §1.12 per-case paths, §1.13 status file, §1.20 freshness, migration shim |
+| 2026-08-02 | `lib/parser.sh` | `812f3fb82a2b07c95f8d48a4dddea25b` | §1.12 prefix from case name, §1.15 comments, §1.17 pseudo preflight, §1.19 NSPIN (cache v4) |
+| 2026-08-02 | `lib/structure.sh` | `427f622e0274b5c68941e049fe6100d4` | §1.16 assert_relax_converged + max-force reader |
+| 2026-08-02 | `lib/run.sh` | `f943975ece275fd6b588297269b9dbbd` | §1.16 relax asserts its own result, §1.19 one pass per spin, §1.20 stale-input refusal |
+| 2026-08-02 | `lib/plot.sh` | `ebfcd4ed755ac4145f354419b3f2bea0` | §1.12 pwscf.* fallback, §1.19 both spin channels |
 | 2026-08-02 | `lib/cif.sh` | `b30d33b7d144824901e227dc29ebc5ef` | §1.22 new file |
-| 2026-08-02 | `lib/plot.sh` | `ebfcd4ed755ac4145f354419b3f2bea0` | §1.19 both spin channels drawn, both engines |
-| ~~2026-08-02~~ | ~~`lib/plot.sh`~~ | ~~`479fb06da5badd09bdb9b1851cfeff7e` | §1.12 `pwscf.*` fallback for folders written by the old layout |
-| 2026-08-02 | `lib/structure.sh` | `427f622e0274b5c68941e049fe6100d4` | §1.16 max-force reader stops at the force decomposition (found against cluster data) |
-| ~~2026-08-02~~ | ~~`lib/structure.sh`~~ | ~~`babffb0d19d79e39f5718ae8d2db6e00` | §1.16 `assert_relax_converged()` + the max-component force note |
-| 2026-08-02 | `lib/run.sh` | `f943975ece275fd6b588297269b9dbbd` | §1.20 scf/band/nscf refuse a stale generated input |
-| ~~2026-08-02~~ | ~~`lib/run.sh`~~ | ~~`1ab765b7956a88ae39cb5d4530b49ab7` | §1.19 bands.x once per spin channel |
-| ~~2026-08-02~~ | ~~`lib/run.sh`~~ | ~~`2725140f2e2394b07190e606a0a826ba` | §1.16 `step_relax` asserts its own result |
-| 2026-08-02 | `config.sh` | `93c39e456c516e65a3a2354e9beaec3f` | §1.16 `REQUIRE_RELAX_CONVERGED` |
 
 `lib/generate.sh` and `lib/init.sh` are unchanged since 2026-07-29.
+
+The 2026-08-02 work landed as one commit, so the intermediate hashes from that
+day are not listed — only the state that was committed and synced.
 
 **`qe.sh`, `config.sh` and every `lib/` file must be byte-identical on the
 cluster, the laptop and GitHub** — only `MAINTENANCE.md` differs, and only in

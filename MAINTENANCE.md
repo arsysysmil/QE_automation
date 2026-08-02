@@ -18,7 +18,7 @@ These copies exist and they are NOT all in sync:
 |---|---|
 | `QE_automation/` on the cluster | where the work actually runs. Synced 2026-08-02. |
 | laptop `~/QE_automation/` | the only laptop copy, and the git repository. `qe.sh`, `config.sh` and `lib/` are byte-identical to the cluster's and must stay that way (§1.6) — check with `md5sum`, a difference is a bug, not a setting. Local runs live in `cases/`, which is gitignored. |
-| the v1 directory beside the cluster one | v1, twelve files, **retired 2026-07-27**. Everything it did is in the current layout, including `script/check_job.sh` which came back as the `check` step (§1b). Kept only as a historical reference: it still has the vc-relax cell bug of §1.1 and none of the fixes below. Do not run it and do not develop there. |
+| v1 | **retired 2026-07-27, directory deleted from the cluster 2026-08-02.** Everything it did is in the current layout, including `script/check_job.sh` which came back as the `check` step (§1b). The whole v1 tree is in git at commit `d5129af`; it still has the vc-relax cell bug of §1.1 and none of the fixes below, so read it as history, never as something to run. |
 
 `MAINTENANCE.md` used to be the one file that differed between copies. It no
 longer does: §5 was rewritten to be generic everywhere, so sync it wholesale
@@ -27,6 +27,12 @@ it — see §5.
 
 As of 2026-08-02 the laptop is on branch `input-validation-and-cif`, committed
 but not pushed; `main` is at the state before §1.12.
+
+Also on 2026-08-02 the cluster copy was reduced to exactly what the laptop has:
+the `.bak_*` files were deleted (every version they held is either in git or in
+the table in §6), along with two dead top-level copies of `init.sh` and
+`plot.sh` that predated the `lib/` split and were called by nothing. There is
+now one workflow directory on the cluster, not two.
 
 If a future session is asked to "fix the QE workflow", check which of these the
 files being looked at belong to before changing anything.
@@ -68,9 +74,10 @@ to angstrom, because pw.x will not read that numeric-alat form back.
 If a future run prints `cell : input cell from ...` for a vc-relax, something
 regressed or the relax did not converge — check before trusting the numbers.
 
-**The same bug is still present in `../QE_workflow/script/extract_structure.sh`
-(v1).** Left alone on purpose: v1 is frozen. Do not "discover" it there and
-patch v1 into a fourth divergent version.
+**The same bug is still present in v1's `script/extract_structure.sh`**, which
+now lives only in git history (`git show d5129af:script/extract_structure.sh`).
+Left alone on purpose: v1 is frozen. Do not "discover" it there and resurrect
+v1 into a divergent version.
 
 ### 1.2 The parser dropped every &SYSTEM key it did not know (fixed 2026-07-27)
 

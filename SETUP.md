@@ -7,7 +7,7 @@ input relax, seluruh tahapan dikerjakan sampai selesai:
 relax → scf → band → bands.x → nscf → dos → plot
 ```
 
-Hasil akhirnya: struktur pita, DOS, gambar PNG, dan file CIF struktur sebelum
+Hasil akhir: struktur pita, DOS, gambar PNG, dan file CIF struktur sebelum
 dan sesudah relaksasi.
 
 Tanpa ini, ketujuh tahap dijalankan satu per satu, dan tiap tahap butuh file

@@ -7,8 +7,10 @@ relax, structure extraction, scf, band structure, DOS, and the figures. The
 same command works on a laptop and on a Slurm cluster — it detects the machine
 rather than being configured for it.
 
-Rewrite of the older `QE_workflow` (v1). v1 is retired — everything it did is
-here, including its `script/check_job.sh`, which came back as the `check` step.
+Rewrite of the older `QE_workflow` (v1). v1 is retired and its directory was
+deleted from the cluster on 2026-08-02 — everything it did is here, including
+its `script/check_job.sh`, which came back as the `check` step. The v1 tree
+itself is in git history at commit `d5129af` if it is ever needed.
 
 Layout: a thin `qe.sh` that resolves paths, loads settings, declares which
 steps exist and runs them, plus `lib/` with one file per concern. The files are
@@ -481,8 +483,8 @@ answer for a plain `relax`, where the cell does not move. A `vc-` calculation
 missing that block warns instead. `step_extract()` prints which source each half
 came from.
 
-Inherited from v1; `../QE_workflow/script/extract_structure.sh` still has it and
-is left alone on purpose.
+Inherited from v1, whose `script/extract_structure.sh` still has the bug — see
+`git show d5129af:script/extract_structure.sh`.
 
 ### 8. Parameters outside the parser's 16 keys are no longer dropped  <-- correctness fix
 

@@ -1,15 +1,166 @@
 # ARCHITECTURE
 
-Cara kerja bagian dalam QE_automation: aliran data antar tahap, alasan tiap
-penolakan, pengaturan, dan batasan yang diketahui. Cara pemakaian ada di
-[`README.md`](README.md).
+Rancangan internal QE_automation: bagaimana kodenya disusun, bagaimana state
+berpindah antar tahap, dan aturan apa yang dijaga. Cara pemakaian ada di
+[`README.md`](README.md) dan tidak diulang di sini.
 
 ---
 
-# 1. Aliran data antar tahap
+# 1. Gambaran umum
 
-Semua dioper lewat file di sebelah input, jadi tiap tahap bisa dijalankan
-sendiri asal tahap sebelumnya sudah menghasilkan yang dibacanya.
+Satu proses bash. `qe.sh` adalah orkestrator; `lib/` berisi implementasi tiap
+urusan; `config.sh` berisi setting. Ketiganya di-**source** menjadi satu
+proses, bukan dijalankan sebagai sub-proses terpisah.
+
+```
+                  ┌─────────────┐
+                  │  config.sh  │   setting
+                  └──────┬──────┘
+                         │ source
+                  ┌──────▼──────┐
+   argumen ──────▶│    qe.sh    │   resolusi path, daftar tahap, dispatch
+                  └──────┬──────┘
+                         │ source
+       ┌────────┬────────┼────────┬────────┬────────┐
+       ▼        ▼        ▼        ▼        ▼        ▼
+   common   parser  structure generate   run     init/plot/cif
+```
+
+Satu proses berarti satu lingkungan dan satu `config.sh`. Konsekuensinya:
+
+- Tahap adalah fungsi shell biasa, sehingga mewarisi lingkungan module secara
+  langsung. Tahap **tidak boleh** diluncurkan lewat `bash -c`: login shell akan
+  men-source ulang `/etc/profile` dan dapat menukar `mpirun` dengan versi yang
+  tidak bisa meluncurkan `pw.x` tertaut Intel-MPI.
+- Fungsi bersama seperti `emit_pw_input()` ada satu kali, bukan disalin ke tiap
+  generator.
+- Urutan source menentukan presedensi nilai. Lihat §5.
+
+## Deteksi lingkungan, bukan konfigurasi per mesin
+
+`qe.sh`, `config.sh`, dan seluruh `lib/` dirancang agar **identik byte per
+byte** di semua mesin. Perbedaan lingkungan diselesaikan saat runtime:
+
+| Yang berbeda | Cara ditentukan |
+|---|---|
+| Jumlah proses | `SLURM_NTASKS` bila ada, selain itu jumlah core fisik |
+| Lokasi `pw.x` | module bila `module` ada, selain itu `PATH` |
+| Daftar module | `QE_MODULES` di `config.sh`, kosong bila tidak ada `module` |
+| Direktori kerja | lokasi skrip, dengan `SLURM_SUBMIT_DIR` sebagai cadangan |
+
+`module` dideteksi sebagai **fungsi** maupun biner: pada Lmod ia fungsi shell,
+sehingga `command -v` saja tidak cukup.
+
+Jumlah core diambil dari core fisik, bukan `nproc`. `nproc` menghitung
+hyperthread, dan Open MPI mengalokasikan satu slot per core, sehingga `pw.x`
+menolak start dengan `not enough slots available in the system`.
+
+Di bawah `sbatch`, skrip dieksekusi dari salinan spool yang direktorinya tidak
+berisi `config.sh` maupun `template/`. `resolve_root_dir()` karena itu menguji
+tiap kandidat dengan memastikan `config.sh` benar-benar ada di sana, bukan
+mengasumsikannya.
+
+---
+
+# 2. Peta kode
+
+| File | Baris | Tanggung jawab |
+|---|---|---|
+| `qe.sh` | 970 | resolusi path, daftar tahap, validasi argumen, preflight, dispatch, trap, ringkasan |
+| `config.sh` | 265 | setting, tanpa logika |
+| `lib/common.sh` | 488 | lingkungan, path per case, aturan kesegaran file, file status, diagnosa, `check` |
+| `lib/parser.sh` | 499 | membaca input relaksasi ke cache, preflight pseudopotensial |
+| `lib/structure.sh` | 342 | geometri hasil relaksasi + pemeriksaan konvergensi |
+| `lib/generate.sh` | 326 | menulis input scf/band/nscf, perhitungan `nbnd` |
+| `lib/run.sh` | 143 | tahap yang meluncurkan pw.x, bands.x, dos.x |
+| `lib/init.sh` | 283 | klasifikasi kisi + jalur band |
+| `lib/plot.sh` | 697 | gambar band/DOS dari data yang sudah jadi |
+| `lib/cif.sh` | 268 | struktur sebagai CIF, sebelum dan sesudah |
+
+Pembagiannya per urusan, bukan per tahap: `lib/run.sh` memegang enam tahap
+karena keenamnya sama-sama "luncurkan MPI lalu periksa hasilnya", sedangkan
+`lib/plot.sh` memegang satu tahap yang isinya paling banyak.
+
+---
+
+# 3. Daftar tahap dan dispatch
+
+Urutan pipeline tersimpan dalam **satu** array di `qe.sh`:
+
+```bash
+PIPELINE_STEPS=( parser relax extract cif gen-scf scf
+                 gen-band band bandsx gen-nscf nscf dos plot )
+
+EXTRA_STEPS=( all dump check init )     # dipanggil per nama, bukan bagian 'all'
+MPI_STEPS=( relax scf band bandsx nscf dos )
+```
+
+Dispatch memetakan nama ke fungsi: `gen-scf` → `step_gen_scf`, tanda hubung
+menjadi garis bawah. `qe.sh` memeriksa saat start bahwa tiap nama terdaftar
+punya fungsi di baliknya.
+
+Semua yang bergantung pada urutan diturunkan dari array ini:
+
+- penomoran tahap yang dicetak (`4/13`)
+- jumlah tahap di file status
+- rentang `--from` / `--until`
+- daftar tahap pada `usage()`
+
+Karena itu menambah tahap tidak pernah berarti menomori ulang apa pun, dan
+tidak ada daftar kedua yang harus dijaga tetap sinkron.
+
+## Menjalankan sebagian pipeline
+
+`--from` dan `--until` diimplementasikan sebagai **pemotongan array**:
+
+```
+--scf / --until=scf      potong sesudah 'scf'
+--from=gen-band          potong sebelum 'gen-band'
+```
+
+Tidak ada penghitung terpisah yang perlu disesuaikan, karena semuanya sudah
+diturunkan dari panjang array. Bagian yang dipotong disimpan di
+`PIPELINE_SKIPPED_BEFORE` / `PIPELINE_SKIPPED_AFTER` untuk dua keperluan:
+
+- **Preflight pseudopotensial ikut menyempit.** `step_needs_pseudo all`
+  memeriksa array yang sudah dipotong, sehingga rentang yang berhenti sebelum
+  pw.x pertama tidak tertahan oleh `pseudo_dir` yang hanya ada di HPC.
+- **Run yang dipersempit tidak pernah mencetak `Workflow Finished
+  Successfully`.** Baris itu akan terbaca seolah gambar sudah jadi. Yang
+  dicetak adalah tahap terakhir yang dijalankan, tahap yang dilewati, dan
+  perintah `--from` untuk melanjutkan.
+
+## Menambah tahap
+
+Dua suntingan:
+
+1. tulis `step_<nama>()` di file `lib/` yang sesuai
+2. tambahkan `<nama>` ke `PIPELINE_STEPS` pada posisi jalannya
+
+Bila tahap itu meluncurkan MPI, tambahkan juga ke `MPI_STEPS` agar preflight
+pseudopotensial mengenalinya.
+
+Semua tahap kecuali enam yang meluncurkan MPI berjalan di login node dalam
+hitungan detik, sehingga perubahan dapat diuji tanpa submit:
+
+```bash
+bash qe.sh parser   <case>_relax.in
+bash qe.sh extract  <case>_relax.in     # butuh <case>_relax.out
+bash qe.sh gen-scf  <case>_relax.in
+```
+
+File `<case>_relax.out` tulisan tangan yang isinya hanya blok
+`Begin final coordinates` sudah cukup untuk menguji `extract` dan ketiga
+generator. Sel akhirnya dibuat berbeda dari sel input agar kedua sumber dapat
+dibedakan pada hasil ekstraksi.
+
+---
+
+# 4. State antar tahap
+
+Tidak ada state dalam memori yang bertahan antar tahap. Semuanya dioper lewat
+file di sebelah input, sehingga tiap tahap dapat dijalankan sendiri asal tahap
+sebelumnya sudah menghasilkan yang dibacanya.
 
 ```
 <case>_relax.in
@@ -33,335 +184,258 @@ sendiri asal tahap sebelumnya sudah menghasilkan yang dibacanya.
                 [plot] ------> <case>_band_dos.png
 ```
 
-Pertemuan di tengah itulah penyalinan yang ingin dihapus sistem ini: geometri
-hasil relaksasi dibaca satu kali, dipakai ketiga input hasil generate.
+Pertemuan di tengah adalah alasan sistem ini ada: geometri hasil relaksasi
+dibaca satu kali, lalu dipakai ketiga input hasil generate.
 
-## Menjalankan sebagian pipeline
+## Penamaan per case, bukan per folder
 
-Urutan tahap tersimpan dalam satu array `PIPELINE_STEPS` di `qe.sh`. Penomoran
-tahap, isi file status, dan ringkasan akhir semuanya diturunkan dari panjang
-array itu, sehingga `--from` dan `--until` cukup diimplementasikan sebagai
-pemotongan array — tidak ada penghitung terpisah yang perlu disesuaikan.
+Setiap file turunan membawa nama case: `cache/<case>.parser.cache`,
+`cache/<case>.structure.in`, `logs/<case>.status.tsv`. Tanpa itu, folder berisi
+tiga case akan menulis satu pasang file yang sama dan case terakhir menang.
+Pipeline penuh kebetulan selamat dari hal itu karena tiap case mem-parsing lalu
+langsung mengonsumsi cache-nya sendiri, tetapi `qe.sh parser <folder>` yang
+disusul `qe.sh gen-scf <folder>` akan meng-generate seluruh input dari
+parameter case terakhir.
 
-```
---scf / --until=scf      potong sesudah 'scf'
---from=gen-band          potong sebelum 'gen-band'
-```
+Alasan yang sama berlaku untuk `prefix`. `bands.x` dan `dos.x` menamai
+keluarannya dari `prefix`, jadi `prefix` kosong yang didefault ke `pwscf` milik
+QE membuat semua case menulis satu `pwscf.dos`. Sistem menurunkannya dari nama
+case; `prefix` eksplisit yang kembar tidak bisa diperbaiki oleh default apa
+pun, sehingga ditolak sebelum apa pun berjalan.
 
-Dua konsekuensi yang disengaja:
+## Versi cache
 
-- Preflight pseudopotensial ikut menyempit. Rentang yang berhenti sebelum pw.x
-  pertama, misalnya `--parser` atau `--gen-scf`, tidak lagi tertahan oleh
-  `pseudo_dir` yang hanya ada di HPC.
-- Run yang dipersempit tidak pernah mencetak `Workflow Finished Successfully`.
-  Baris itu akan terbaca seolah gambar sudah jadi, padahal belum. Yang dicetak
-  adalah tahap terakhir yang dijalankan, daftar tahap yang dilewati, dan
-  perintah `--from` untuk melanjutkan.
+`cache/<case>.parser.cache` membawa `CACHE_VERSION`, dibandingkan dengan
+`CACHE_VERSION_EXPECTED` (kini `4`) di `lib/parser.sh`. Bila tidak cocok,
+cache dibangun ulang, bukan di-source: field yang hilang akan membuat
+passthrough kosong diam-diam, yang tidak dapat dibedakan dari passthrough yang
+rusak.
 
-Nama tahap yang bukan bagian pipeline (`dump`, `check`, `init`) ditolak sebagai
-batas rentang, begitu pula rentang kosong dan penggabungan rentang dengan satu
-nama tahap.
+**Naikkan `CACHE_VERSION_EXPECTED` setiap kali ada field baru di cache.**
+Namanya sengaja berbeda dari `CACHE_VERSION` karena men-source cache akan
+menimpa nilai pembandingnya.
 
-## File per case
+## Aturan kesegaran
 
-```
-<case>_relax.in                    file input
-<case>_band.path                   WAJIB untuk tahap band
-<case>_initial.cif                 struktur sebelum relaksasi
-<case>_relaxed.cif                 struktur sesudah relaksasi
-cache/<case>.parser.cache          nilai hasil parsing input
-cache/<case>.structure.in          geometri hasil relaksasi
-logs/<case>.status.tsv             tahap mana yang jalan, dan bagaimana selesainya
-<prefix>.bands.dat.gnu             data band            (bands.x)
-<prefix>.bands.{up,dn}.dat.gnu     data band per kanal spin, nspin=2
-<prefix>.dos                       data DOS             (dos.x)
-<case>_band.png                    gambar               (plot)
-<case>_dos.png
-<case>_band_dos.png
-<case>_plot.py  atau  _plot.gnu    skrip penggambarnya, bebas diedit
-```
+Cache, geometri, dan input hasil generate semuanya snapshot dari sesuatu yang
+bisa berubah di bawahnya. Aturannya satu baris:
 
----
+> File turunan tidak boleh lebih **tua** dari sumbernya.
 
-# 2. Jenis material yang diterima
+Memakai mtime, bukan checksum: tidak butuh state tambahan, dan "harus lebih
+baru" berarti file yang ditulis pada detik yang sama tidak ikut memicunya.
 
-| Input | Jalan | Keterangan |
-|---|---|---|
-| Slab 2D heksagonal (graphene, MoS₂, WS₂) | ya | `cell_dofree='2Dxy'` menjaga k_z tetap 1 |
-| Bulk 3D, kisi Bravais apa pun, `ibrav = 0` | ya | nscf memperbesar ketiga arah |
-| Insulator / semikonduktor, `occupations='fixed'` | ya | smearing/degauss tidak ikut ditulis |
-| Logam dengan smearing | ya | |
-| Terpolarisasi spin (`nspin=2`) | ya | bands.x jalan dua kali |
-| Terkoreksi dispersi (`vdw_corr`) | ya | lewat passthrough |
-| DFT+U, card `HUBBARD` (QE 7.x) | ya | lewat passthrough card |
-| DFT+U, `lda_plus_u` di `&SYSTEM` (QE 6.x) | ya | lewat passthrough namelist |
-| Banyak spesies (`ntyp` ≥ 3) | ya | |
-| Molekul terisolasi, `K_POINTS gamma` | ya, `NPOOL_WANTED=1` | |
-| **`ibrav ≠ 0`** (celldm / A,B,C) | **tidak** | tidak ada card `CELL_PARAMETERS` untuk dioper; gagal di `extract` |
-| **Daftar k eksplisit** (`crystal`/`tpiba`) | **tidak** | tidak ada mesh untuk diperbesar nscf; ditolak di tahap 1 |
+Cache di bawah `cache/` dibangun ulang otomatis karena bukan file tulisan
+tangan siapa pun. Input hasil generate tidak: sistem berhenti dan meminta tahap
+`gen-*` dijalankan, karena suntingan tangan pada file itu adalah hal yang sah
+dan tidak boleh ditimpa diam-diam. Suntingan tangan otomatis menang, karena
+menjadi file termuda.
 
-Kedua baris "tidak" gagal disertai pesan yang menyebut penyebab dan solusinya.
+## Catatan status
 
-Catatan versi: **QE 6.7 belum punya card `HUBBARD`** (baru ada di 7.1). Di versi
-itu DFT+U ditulis `lda_plus_u` + `Hubbard_U(i)` di `&SYSTEM`, yang sudah terbawa
-lewat passthrough namelist.
+`logs/<case>.status.tsv` mencatat tiap tahap **sebelum** tahap itu dimulai.
+Baris `RUNNING` tanpa hasil sesudahnya berarti tahap tersebut terputus — benar
+bahkan di bawah SIGKILL, yang dipakai batas waktu maupun OOM killer dan tidak
+dapat ditangkap trap mana pun.
+
+Dua rincian yang perlu dipertahankan:
+
+- **Menambah, bukan menimpa.** Menjalankan ulang `plot` untuk memperbaiki
+  gambar tidak boleh menghapus catatan run 13 tahap yang menghasilkan datanya.
+  Hanya blok setelah baris `# run` terakhir yang dilaporkan.
+- **Trap dipasang di dalam subshell per case.** Bash mereset trap induk di
+  dalam subshell, sehingga trap EXIT yang dipasang di luar tidak akan menyala
+  untuk tahap yang benar-benar gagal.
+
+Hasil tahap direkam dari trap EXIT, bukan setelah pemanggilan tahap, karena
+sebagian besar fungsi tahap melaporkan kegagalan dengan `exit 1` sehingga kode
+setelah pemanggilannya tidak pernah tercapai.
 
 ---
 
-# 3. Apa yang ditolak sistem, dan kenapa
+# 5. Lapisan setting
 
-Tiap butir di bawah ini adalah kegagalan yang tanpa pemeriksaan akan selesai
-dengan exit 0 dan fisika yang berbeda. Menolak itulah inti alat ini;
-mengotomatiskan pengetikan hanya efek samping.
+Presedensi, dari yang paling kuat:
 
-## Relaksasi yang tidak konvergen
+```
+file input  >  DEFAULT_* di config.sh  >  bawaan QE
+```
 
-pw.x mencetak `JOB DONE.` baik minimisasi ionik konvergen maupun tidak — BFGS
-yang kehabisan `nstep` selesai dengan rapi dan meninggalkan langkah terakhirnya
-di output. Tahap `relax` dan `extract` mewajibkan baris
-`bfgs converged in N scf cycles`. Diperiksa di `extract` juga, supaya run
-relaksasi dari luar sistem ini yang disalin masuk ikut tercakup.
-`REQUIRE_RELAX_CONVERGED=0` di `config.sh` menurunkannya jadi peringatan.
+`config.sh` di-source **sesudah** cache hasil parsing. Karena itu tidak boleh
+ada nama di `config.sh` yang bertabrakan dengan yang ditulis cache — nama yang
+sama akan menggantikan apa pun yang tertulis di file input, tanpa pesan.
+Semua fallback berawalan `DEFAULT_` justru untuk itu.
 
-Komponen gaya terbesar dibandingkan dengan `forc_conv_thr` milik run itu
-sendiri, dan dilaporkan kalau melebihi. Untuk `vc-relax`, angka itu berasal
-dari scf final yang QE jalankan pada sel hasil relaksasi dengan vektor-G
-dihitung ulang. Kalau di situ melebihi ambang, berarti strukturnya konvergen
-pada basis awalnya, bukan pada basis yang benar — **tekanan Pulay**. Obatnya:
-jalankan `vc-relax` lagi dari struktur akhir sampai selnya berhenti bergerak,
-atau naikkan `ecutwfc` sampai keduanya sepakat.
+Nama yang dipesan cache: `PREFIX`, `OUTDIR`, `PSEUDO_DIR`, `CALCULATION`,
+`IBRAV`, `NAT`, `NTYP`, `ECUTWFC`, `ECUTRHO`, `OCCUPATIONS`, `SMEARING`,
+`DEGAUSS`, `CONV_THR`, `MIXING_BETA`, `CELL_DOFREE`, `ATOMIC_SPECIES`,
+`K_POINTS`.
 
-Tanda tangan Pulay yang mudah dilihat: jarak besar antara energi BFGS terakhir
-dan baris "Final scf calculation at the relaxed structure".
+## Passthrough
 
-## Jalur band yang bukan milik kisinya
+`get_param()` hanya mengenal 16 key. Sisanya harus tetap sampai ke input
+scf/band/nscf, atau ketiganya akan mendeskripsikan fisika yang berbeda dari
+relaksasinya tanpa error apa pun.
 
-`<case>_band.path` wajib, tidak pernah didefault. `qe.sh init` mengukur selnya,
-mengklasifikasikan kisinya, mencetak klasifikasinya, lalu menulis jalur yang
-cocok — dan menolak menebak kalau selnya tidak terklasifikasi. Jalur heksagonal
-pada sel kubik menghasilkan struktur pita yang bersih dari hal yang salah.
+`&CONTROL`, `&SYSTEM`, dan `&ELECTRONS` karena itu disalin sebagai **baris
+mentah** dikurangi key yang ditulis generator sendiri (`DROP_SYSTEM` di
+`lib/parser.sh`). Mentah, bukan diparsing, supaya key berindeks seperti
+`starting_magnetization(1)` dan bentuk yang belum pernah ditemui ikut lolos
+utuh.
 
-Kasus heksagonal punya dua setting: kisi yang sama, basis resiprok yang
-berbeda.
+Card diperlakukan sama: `HUBBARD` dan `OCCUPATIONS` dibawa (`CARDS_KEPT`),
+ditambahkan setelah `K_POINTS`. Urutan card bebas di QE, sehingga
+`emit_extra_cards` dipanggil terakhir oleh tiap generator, bukan dilipat ke
+dalam `emit_pw_input`. `CONSTRAINTS`, `ATOMIC_VELOCITIES`, dan `ATOMIC_FORCES`
+sengaja tidak dibawa: ketiganya hanya bermakna untuk relaksasi atau MD.
+
+## Pool k-point
+
+`NPOOL` mengoper `-nk` ke `pw.x` dan `bands.x`. Pool membagi rank menjadi
+kelompok yang masing-masing mengambil sebagian titik k, sehingga jatah
+gelombang bidang tiap kelompok tetap besar.
+
+Tanpa itu, sel kecil di atas banyak rank membuat sebagian rank kebagian nol
+vektor-G, dan `bands.x` gagal dengan `Error in routine diropn (3): wrong record
+length`. Panjang rekaman fungsi gelombang adalah `nbnd × npwx`, dan `npwx`
+dihitung per rank. QE sudah memberi tahu lebih dulu lewat
+`some processors have no G-vectors for symmetrization`.
+
+`NPROC` harus habis dibagi `NPOOL`, dan `NPOOL` tidak boleh melebihi jumlah
+titik k; keduanya diperiksa sebelum peluncuran. `NPOOL` juga dijepit ke pembagi
+terbesar dari `NPROC` yang tidak melebihi `NPOOL_WANTED`, karena nilai tetap
+akan gagal pada jumlah core yang tidak membaginya.
+
+`bands.x` menerima flag yang sama dengan sengaja: pasca-pemrosesan harus
+memakai layout pool dari run yang menghasilkan fungsi gelombangnya. `dos.x`
+tidak menerimanya.
+
+---
+
+# 6. Keputusan desain
+
+## Menolak, bukan menebak
+
+Tiap pemeriksaan di sistem ini menangani kegagalan yang tanpa pemeriksaan akan
+selesai dengan exit 0 dan fisika yang berbeda — bukan kegagalan yang membuat
+program berhenti sendiri. Itu sebabnya penolakan adalah inti alat ini dan
+otomatisasi pengetikan hanya efek sampingnya.
+
+Konsekuensi rancangan: **validasi dilakukan sedini mungkin, bukan di tempat
+nilainya dipakai.** Mode `K_POINTS` diperiksa di tahap 1, bukan di generator
+nscf yang membutuhkannya, karena kalau tidak, bentuk yang tidak didukung baru
+gagal setelah relax, scf, band, dan bands.x berjalan. Pseudopotensial diperiksa
+untuk semua case sekaligus sebelum antre, karena pw.x baru menemukannya
+beberapa detik setelah job yang antre berjam-jam akhirnya mulai.
+
+## Sedini mungkin, tetapi tidak lebih fatal dari perlunya
+
+Pemeriksaan pseudopotensial fatal hanya untuk tahap yang meluncurkan pw.x.
+Menyiapkan input di mesin lokal terhadap `pseudo_dir` milik HPC adalah alur
+kerja yang sah, jadi tahap lain hanya mencetak catatan lalu lanjut.
+
+Pola yang sama pada tahap `plot`: ia **fail-soft**, mengembalikan sukses
+walaupun tidak menggambar apa pun. Ia tahap terakhir dari pipeline yang mungkin
+berjalan berjam-jam, dan node tanpa matplotlib bukan alasan menyatakan
+perhitungan yang sudah selesai sebagai gagal. Kegagalannya dicetak penuh,
+sehingga non-fatal, bukan senyap.
+
+## Menghasilkan skrip, bukan menggambar langsung
+
+Tahap `plot` menulis `<case>_plot.py` (atau `.gnu`) lalu menjalankannya. Gambar
+untuk paper selalu perlu disetel, dan penyetelan itu tidak boleh menyentuh
+`lib/`. Konsekuensi yang harus diterima: menjalankan ulang `qe.sh plot`
+menimpa skrip tersebut.
+
+Posisi tick diambil dari `bands.x`, label dari `<case>_band.in`. File `.path`
+berisi koordinat fraksional, sedangkan sumbu x plot adalah jarak tempuh di
+ruang resiprok, dan hanya `bands.x` yang sudah melakukan konversi itu. Label
+diambil dari `.in` karena itulah yang benar-benar dilihat `bands.x`; menyunting
+file `.path` setelah run akan memberi label pada data yang tidak
+dideskripsikannya. Bila jumlahnya tidak cocok, tick **dinomori**, tidak
+ditebak.
+
+## Nol pada sumbu energi dari run nscf
+
+E_Fermi tidak dibaca dari rapat muatan; ia dicari dengan mengintegralkan
+okupasi atas mesh k, dan mesh scf lebih kasar daripada mesh nscf. Pada
+semikonduktor, E_Fermi dari mesh scf yang kasar dapat jatuh di luar gap
+sehingga garis nol menembus pita. Nilai nscf juga yang ditulis `dos.x` ke
+header DOS, sehingga kedua panel memakai nol yang sama dengan data DOS.
+
+Urutan sumber: output nscf → header DOS → output scf, dan jatuh ke scf
+mencetak peringatan beserta alasannya.
+
+## Simetri CIF ditulis `P 1`
+
+Grup ruang yang ditebak dari koordinat hasil relaksasi menghasilkan CIF yang
+salah tanpa pesan apa pun. Penampil seperti VESTA mendeteksi simetrinya sendiri
+dengan toleransi yang dapat diatur pengguna.
+
+## `nbnd` dihitung untuk band dan nscf, bukan scf
+
+Bawaan QE meninggalkan grafik pita tanpa apa pun di atas tingkat Fermi. Itu
+tidak salah untuk scf, yang tugasnya rapat muatan dan tidak memperoleh apa pun
+dari pita kosong; keduanya salah untuk dua tahap yang justru ada untuk
+menampilkan keadaan kosong.
+
+Jumlah elektron diambil dari `<case>_scf.out` bila ada, selain itu dijumlahkan
+dari `z_valence` di file `.UPF` — yang kedua diperlukan agar generator tetap
+dapat dijalankan sendiri sebelum ada scf. Bila satu spesies saja tidak terbaca,
+penjumlahan dibatalkan, karena jumlah yang kurang lebih buruk daripada tidak
+ada jumlah sama sekali.
+
+## Klasifikasi kisi diukur, tidak diwarisi
+
+`qe.sh init` mengukur panjang rusuk dan sudut dari `CELL_PARAMETERS`, mencetak
+klasifikasinya beserta angka di baliknya, lalu menolak menebak bila selnya
+tidak terklasifikasi. Toleransinya 0,1% untuk panjang dan 0,5° untuk sudut:
+1% terlalu longgar, karena distorsi yang justru menjadi inti fisika sebuah
+material sering hanya sebesar ~1%.
+
+Kasus heksagonal punya dua setting yang merupakan kisi sama tetapi basis
+resiprok berbeda:
 
 | Setting | a₂ | K |
 |---|---|---|
 | γ = 60° | `(a/2, a√3/2, 0)` | **(2/3, 1/3, 0)** |
 | γ = 120° | `(−a/2, a√3/2, 0)` | **(1/3, 1/3, 0)** |
 
-`template/` berisi satu contoh untuk masing-masing.
-
-## Parameter yang hilang diam-diam saat men-generate input
-
-`&CONTROL`, `&SYSTEM`, dan `&ELECTRONS` disalin sebagai baris mentah dikurangi
-key yang ditulis generator sendiri, jadi `nbnd`, `nspin`,
-`starting_magnetization(1)`, `vdw_corr`, card `HUBBARD`, dan apa pun yang lain
-ikut selamat. Disalin mentah, bukan diparsing, supaya key berindeks lolos utuh.
-Parser mencetak apa saja yang dibawanya.
-
-`CONSTRAINTS`, `ATOMIC_VELOCITIES`, dan `ATOMIC_FORCES` sengaja **tidak**
-dibawa — ketiganya hanya bermakna untuk relaksasi atau MD.
-
-## Satu kanal spin mewakili dua
-
-bands.x menulis satu kanal per run dan defaultnya kanal pertama, sedangkan
-dos.x menulis keduanya tanpa diminta. Untuk kasus `nspin=2` itu berarti panel
-band menampilkan spin up saja di sebelah panel DOS dua kanal. Tahap `bandsx`
-karena itu jalan sekali per kanal, dan kedua gambar menggambar keduanya: up
-garis penuh, down garis putus. `noncolin` bukan hal yang sama — di sana kedua
-kanal tidak terpisahkan, jadi tetap satu pass.
-
-## File turunan lebih tua dari sumbernya
-
-Cache, geometri, dan input hasil generate semuanya snapshot. Edit input maka
-cache dibaca ulang; ulangi relaksasi maka geometri diambil ulang; edit
-`<case>_band.path` lalu jalankan `band` tanpa `gen-band` maka tahap itu
-berhenti, bukan menyusuri jalur lama. Yang paling akhir ditulis, itu yang
-menang — termasuk suntingan tangan pada input hasil generate, karena suntingan
-itu menjadi file termuda.
-
-Memakai mtime, bukan checksum: tidak butuh state tambahan, dan "harus lebih
-baru" berarti file yang ditulis pada detik yang sama tidak ikut memicunya.
-
-## Pseudopotensial hilang, sebelum antre bukan sesudah
-
-`pseudo_dir` dan tiap `.upf` di `ATOMIC_SPECIES` diverifikasi untuk semua case
-sebelum case pertama mulai. pw.x baru menemukannya beberapa detik setelah job
-yang antre berjam-jam akhirnya jalan. Fatal hanya untuk tahap yang meluncurkan
-pw.x — menyiapkan input di mesin lokal terhadap `pseudo_dir` milik cluster hanya
-mencetak catatan lalu lanjut.
-
-## Dua case dalam satu folder menulis file yang sama
-
-bands.x dan dos.x menamai keluarannya dari `prefix`, jadi `prefix` yang kembar
-berarti satu `<prefix>.dos` milik case yang selesai terakhir. `prefix` yang
-kosong didefault ke nama case; `prefix` yang eksplisit dan kembar ditolak
-sebelum apa pun jalan.
-
-## Grafik band tanpa pita di atas tingkat Fermi
-
-Lihat bagian `nbnd` di `README.md`. Ringkasnya: `gen-band` dan `gen-nscf`
-menghitung `nbnd` sendiri kalau input tidak menyebutnya, sumber jumlah
-elektronnya `<case>_scf.out` atau `z_valence` dari pseudopotensial, dan tahap
-`scf` sengaja tidak diberi.
+Sel jangkung (`c/a > 2`) diperlakukan sebagai slab dan jalurnya kehilangan
+k_z, karena menyampel k_z dari celah vakum tidak bermakna.
 
 ---
 
-# 4. Kalau run terputus
+# 7. Batasan arsitektural
 
-Tiap tahap dicatat ke `logs/<case>.status.tsv` **sebelum** dimulai, jadi tahap
-yang tidak punya baris hasil sesudahnya adalah tahap yang terputus — berlaku
-bahkan di bawah SIGKILL, yang dipakai batas waktu maupun OOM killer dan tidak
-bisa ditangkap trap mana pun. `qe.sh check` mengubahnya jadi kalimat:
+Bukan daftar bug, melainkan hal yang mengikuti dari rancangan sekarang.
 
-```
-Last run of 'gra3' (job 412899, started 2026-08-02 01:52:03):
-   1/13  parser    OK       0h0m3s
-   2/13  relax     RUNNING  started 2026-08-02 01:52:06
-
-INTERRUPTED: step 2/13 (relax) started at 2026-08-02 01:52:06 and never
-  finished. The process was killed while it was running - walltime,
-  scancel, out of memory, or a node failure - so nothing after it ran.
-  What killed it:
-    sacct -j 412899 --format=JobID,State,ExitCode,Elapsed,Timelimit,MaxRSS
-```
-
-Mencatat dengan menambah, bukan menimpa — menjalankan ulang `plot` untuk
-memperbaiki gambar tidak boleh menghapus catatan run 13 tahap yang menghasilkan
-datanya.
-
----
-
-# 5. Pengaturan di `config.sh`
-
-| Pengaturan | Bawaan | Keterangan |
-|---|---|---|
-| `NPOOL_WANTED` | 4 | jumlah pool k-point yang diminta |
-| `NSCF_KPOINT_SCALE` | 2 | mesh nscf = mesh scf × ini |
-| `DOS_DELTAE` | 0.01 | lebar bin DOS |
-| `AUTO_NBND_FACTOR` | 1.5 | pengali `nbnd` untuk band/nscf; 0 mematikan |
-| `DEFAULT_OCCUPATIONS` | fixed | dipakai hanya kalau input tidak menyebut |
-| `DEFAULT_CONV_THR` | 1.0d-8 | idem |
-| `DEFAULT_MIXING_BETA` | 0.7 | idem |
-| `DEFAULT_SMEARING` / `DEFAULT_DEGAUSS` | mv / 0.02 | idem, hanya untuk `occupations='smearing'` |
-| `REQUIRE_RELAX_CONVERGED` | 1 | 0 menurunkannya jadi peringatan |
-| `PLOT_ENGINE` | auto | matplotlib, gnuplot, none |
-| `PLOT_EMIN` / `PLOT_EMAX` | −5.0 / 5.0 | jendela energi gambar baru |
-| `CASES_PARALLEL` | 1 | > 1 menumpuk case; lihat catatan di bawah |
-| `QE_MODULES` | — | daftar module, kosong di mesin tanpa `module` |
-
-Semua fallback berawalan `DEFAULT_`. Awalan itu wajib: `config.sh` di-source
-sesudah cache hasil parsing, jadi nama yang bertabrakan akan menggantikan apa
-pun yang tertulis di file input.
-
-`CASES_PARALLEL > 1` tersedia tapi tidak dianjurkan di sini — terukur 45–51
-menit melawan 3m07s sekuensial untuk pekerjaan yang sama. Penyebabnya belum
-ditemukan; jangan ubah bawaannya tanpa mengukur ulang.
-
-## Pool k-point (`NPOOL`)
-
-`NPOOL` mengoper `-nk` ke `pw.x` dan `bands.x`. Pool membagi rank jadi
-kelompok-kelompok yang masing-masing mengambil sebagian titik k, sehingga jatah
-gelombang bidang tiap kelompok tetap besar.
-
-Tanpa itu, sel kecil di atas banyak rank membuat sebagian rank kebagian nol
-vektor-G, dan `bands.x` gagal dengan:
-
-```
-Error in routine diropn (3): wrong record length
-```
-
-Panjang rekaman fungsi gelombang adalah `nbnd × npwx`, dan `npwx` dihitung per
-rank. QE sebenarnya sudah memberi tahu lebih dulu, di baris yang biasanya
-terlewat:
-
-```
-Message from routine sym_rho_init:
-some processors have no G-vectors for symmetrization
-```
-
-Syarat: `NPROC` harus habis dibagi `NPOOL`, dan `NPOOL` tidak boleh melebihi
-jumlah titik k. Keduanya diperiksa sebelum apa pun diluncurkan. `bands.x`
-sengaja diberi flag yang sama — pasca-pemrosesan harus memakai layout pool dari
-run yang menghasilkan fungsi gelombangnya. `dos.x` tidak diberi.
-
-`NPROC` diambil dari `SLURM_NTASKS` di bawah Slurm, kalau tidak ada dari
-**jumlah core fisik** — bukan `nproc`, yang menghitung hyperthread dan membuat
-Open MPI menolak start dengan `not enough slots available in the system`.
-
----
-
-# 6. Mengubah kodenya
-
-Menambah tahap butuh dua suntingan: tulis `step_<nama>()` di file `lib/` yang
-sesuai, lalu tambahkan `<nama>` ke `PIPELINE_STEPS` di `qe.sh` pada posisi
-jalannya. Penomoran tahap (`4/13`) dihitung dari daftar itu, jadi tidak ada
-yang perlu dinomori ulang.
-
-```
-qe.sh              orkestrator: path, config, daftar tahap, dispatch
-lib/common.sh      lingkungan, path per case, kesegaran file, status, diagnosa
-lib/parser.sh      membaca input relaksasi, preflight pseudopotensial
-lib/structure.sh   geometri hasil relaksasi + pemeriksaan konvergensi
-lib/cif.sh         struktur sebagai CIF, sebelum dan sesudah
-lib/generate.sh    menulis input scf / band / nscf
-lib/run.sh         tahap yang meluncurkan pw.x / bands.x / dos.x
-lib/init.sh        deteksi kisi + jalur band
-lib/plot.sh        gambar band / DOS dari data yang sudah jadi
-```
-
-File `lib/` di-**source** ke satu proses, jadi ada satu lingkungan dan satu
-`config.sh`. Jangan meluncurkannya lewat `bash -c`: login shell akan
-men-source ulang `/etc/profile` dan bisa menukar `mpirun` dengan yang tidak
-bisa meluncurkan `pw.x` tertaut Intel-MPI.
-
-## Menguji tanpa menghabiskan jatah antrean
-
-Semua tahap kecuali empat yang meluncurkan MPI berjalan di login node dalam
-hitungan detik:
-
-```bash
-bash qe.sh parser   <case>_relax.in
-bash qe.sh dump     <case>_relax.in
-bash qe.sh extract  <case>_relax.in     # butuh <case>_relax.out yang sudah ada
-bash qe.sh gen-scf  <case>_relax.in
-bash qe.sh gen-band <case>_relax.in
-bash qe.sh gen-nscf <case>_relax.in
-```
-
-File `<case>_relax.out` tulisan tangan yang isinya hanya blok
-`Begin final coordinates` sudah cukup untuk menguji `extract` dan ketiga
-generator. Buat sel akhirnya berbeda dari sel input, supaya kedua sumbernya
-bisa dibedakan pada geometri hasil ekstraksi.
-
-Belum ada tes otomatis.
-
-Kalau partisi `short` penuh, `sbatch -p interactive` mulai seketika — tapi
-node-nya dipakai bersama, jadi ukur `-t` untuk kondisi ramai, bukan kondisi
-sepi.
-
----
-
-# 7. Batasan yang diketahui
-
-1. **`ibrav ≠ 0` tidak dikonversi.** Ini penghalang terbesar bagi orang lain
-   yang ingin memakainya: hampir semua input dari tutorial, paper, atau
-   Materials Project memakai `celldm`, jadi memakai sistem ini dimulai dengan
-   konversi tangan. `ibrav` 1–14 adalah rumus tertutup, jadi ini bisa
-   diotomatiskan.
-2. **Tidak ada tes otomatis.**
-3. **Job yang terputus tidak bisa dilanjutkan**, hanya diulang.
-4. **`bandsx` tidak boleh diulang setelah `nscf`** — keempat tahap pw.x berbagi
-   satu `outdir` dan `prefix`. Sudah tertulis di dokumen, belum dideteksi.
-5. **Tidak ada reset `work/` sebelum sebuah tahap.** Job yang mati separuh
-   jalan meninggalkan `work/` setengah tertulis yang dipakai ulang run
-   berikutnya. Bersihkan manual.
-6. **Uji 2D memakai `c/a > 2.0`.** Benar untuk monolayer, salah untuk kristal
-   3D yang memang berlapis: grafit (c/a = 2,7) dan bulk 2H-MoS₂ (c/a = 3,9)
-   sama-sama akan kehilangan dispersi Γ–A. Uji yang lebih jujur adalah sebaran
-   koordinat z atom terhadap c, bukan rasio sumbu.
-7. **PDOS dan work function belum ada.**
-8. **`convergence NOT achieved` di scf tidak punya diagnosa** — keluar output
-   pw.x mentah, bukan petunjuk soal `mixing_beta`, `conv_thr`, atau
-   `diagonalization`.
+1. **`ibrav ≠ 0` tidak dikonversi.** Geometri dioper antar tahap sebagai card
+   `CELL_PARAMETERS`, sehingga input yang mendeskripsikan kisinya lewat
+   `celldm` tidak punya apa pun untuk diambil. `ibrav` 1–14 adalah rumus
+   tertutup, jadi konversi bisa ditambahkan di `lib/parser.sh` tanpa mengubah
+   rancangan lain.
+2. **Tidak ada tes otomatis.** Untuk alat yang tugasnya menolak, penolakan yang
+   tidak diuji lebih buruk daripada tidak menolak. Perintah di §3 adalah
+   kandidat langsung untuk dibekukan menjadi `tests/run.sh`.
+3. **Run yang terbunuh tidak dapat dilanjutkan.** `logs/<case>.status.tsv`
+   sudah mencatat tahap mana yang selesai, sehingga datanya ada; yang belum ada
+   adalah melewati tahap yang keluarannya sudah lengkap. `--from` menutup
+   sebagian kebutuhan ini secara manual.
+4. **Keempat tahap pw.x berbagi satu `outdir` dan `prefix`.** Karena itu
+   `bandsx` tidak boleh diulang setelah `nscf`: fungsi gelombang yang tersimpan
+   sudah milik nscf. Dapat dideteksi dari `.xml` di dalam save dir, yang
+   merekam jenis kalkulasinya; saat ini belum.
+5. **Tidak ada reset `work/` sebelum tahap.** `setup_case()` juga hardcode
+   `mkdir -p "$INPUT_DIR/work"` walaupun `outdir` di input menunjuk ke tempat
+   lain.
+6. **Uji slab memakai rasio sumbu `c/a > 2.0`**, bukan sebaran koordinat z atom
+   terhadap c. Benar untuk monolayer, salah untuk kristal 3D yang memang
+   berlapis: grafit (c/a = 2,7) dan bulk 2H-MoS₂ (c/a = 3,9) sama-sama akan
+   kehilangan dispersi Γ–A.
+7. **`CASES_PARALLEL > 1` terukur jauh lebih lambat** daripada sekuensial
+   (45–51 menit melawan 3m07s untuk pekerjaan yang sama). Penyebabnya belum
+   ditemukan.
+8. **`convergence NOT achieved` pada scf tertangkap tetapi tidak terdiagnosa.**
+   `diagnose_failure()` belum punya cabang untuknya.
 9. **Sapuan `runlogs/` balapan dengan job serentak.** Kosmetik.

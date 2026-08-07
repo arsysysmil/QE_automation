@@ -171,8 +171,21 @@ EXTRA_STEPS=( all dump check init )
 MPI_STEPS=( relax scf band bandsx nscf dos )
 
 step_needs_pseudo() {
-    local s
-    [[ "$1" == "all" ]] && return 0
+    local s t
+
+    # 'all' is however much of the pipeline this run covers. A range that
+    # stops before the first pw.x - `--parser`, `--gen-scf` - needs no
+    # pseudopotentials, and should not be held up by a pseudo_dir that only
+    # exists on the cluster.
+    if [[ "$1" == "all" ]]; then
+        for t in "${PIPELINE_STEPS[@]}"; do
+            for s in "${MPI_STEPS[@]}"; do
+                [[ "$s" == "$t" ]] && return 0
+            done
+        done
+        return 1
+    fi
+
     for s in "${MPI_STEPS[@]}"; do
         [[ "$s" == "$1" ]] && return 0
     done
@@ -217,6 +230,25 @@ step_label_for() {
     printf '%s' "${STEP_LABELS[$name]:-${name^^}}"
 }
 
+# What this run covers, for the header and the log. 'all' on its own when the
+# whole pipeline runs, otherwise the range and what it leaves out.
+step_description() {
+    if [[ "$STEP" != "all" ]]; then
+        printf '%s' "$STEP"
+        return 0
+    fi
+
+    if (( ${#PIPELINE_SKIPPED_BEFORE[@]} == 0 && ${#PIPELINE_SKIPPED_AFTER[@]} == 0 )); then
+        printf 'all (%d steps)' "${#PIPELINE_STEPS[@]}"
+        return 0
+    fi
+
+    printf '%s -> %s (%d of %d steps)' \
+        "${PIPELINE_STEPS[0]}" "${PIPELINE_STEPS[-1]}" \
+        "${#PIPELINE_STEPS[@]}" \
+        "$(( ${#PIPELINE_STEPS[@]} + ${#PIPELINE_SKIPPED_BEFORE[@]} + ${#PIPELINE_SKIPPED_AFTER[@]} ))"
+}
+
 is_known_step() {
     local candidate
     for candidate in "${PIPELINE_STEPS[@]}" "${EXTRA_STEPS[@]}"; do
@@ -239,6 +271,16 @@ usage() {
     echo "allocation. A failing case does not stop the others; a summary is printed"
     echo "at the end. Set CASES_PARALLEL > 1 in config.sh to overlap them instead,"
     echo "but read the note there first: overlapping measured far slower here."
+    echo ""
+    echo "Running only part of the pipeline (the flag can go anywhere):"
+    echo ""
+    echo "    bash qe.sh cases/mos2 --scf           stop after scf"
+    echo "    bash qe.sh cases/mos2 --until=scf     the same, spelled out"
+    echo "    bash qe.sh cases/mos2 --from=gen-band pick a stopped run back up"
+    echo "    bash qe.sh cases/mos2 --from=gen-band --until=bandsx"
+    echo ""
+    echo "Any pipeline step below can name the end or the start of a range."
+    echo "Naming one step instead (qe.sh scf ...) runs only that step."
     echo ""
     echo "Steps:"
     printf '  %-10s %s\n' "all" "the default: ${PIPELINE_STEPS[*]}"
@@ -264,6 +306,37 @@ case "${1:-}" in
     -h|--help|help) usage; exit 0 ;;
 esac
 
+# Running only part of the pipeline.
+#
+#     bash qe.sh cases/mos2 --scf          stop after scf
+#     bash qe.sh cases/mos2 --until=scf    the same, spelled out
+#     bash qe.sh cases/mos2 --from=gen-band    pick a stopped run back up
+#
+# Written after the inputs because that is where it reads best, but position
+# does not matter - the flags are pulled out of the argument list here, before
+# anything else looks at it.
+#
+# This is a slice of PIPELINE_STEPS, nothing more. Every counter, the status
+# file and the summary all come from that array's length, so narrowing it is
+# the whole implementation.
+STOP_AFTER=""
+START_FROM=""
+PIPELINE_SKIPPED_BEFORE=()
+PIPELINE_SKIPPED_AFTER=()
+_ARGS=()
+
+for _arg in "$@"; do
+    case "$_arg" in
+        --until=*) STOP_AFTER="${_arg#--until=}" ;;
+        --from=*)  START_FROM="${_arg#--from=}"  ;;
+        --*)       STOP_AFTER="${_arg#--}"       ;;
+        *)         _ARGS+=("$_arg")              ;;
+    esac
+done
+
+set -- ${_ARGS[@]+"${_ARGS[@]}"}
+unset _arg _ARGS
+
 # A step name never ends in _relax.in, so the two forms are unambiguous:
 #   qe.sh a_relax.in b_relax.in        -> step 'all', two cases
 #   qe.sh scf a_relax.in b_relax.in    -> step 'scf', two cases
@@ -284,6 +357,85 @@ if [[ $# -lt 1 ]]; then
     echo ""
     usage
     exit 1
+fi
+
+#############################
+# Narrowing the pipeline to a range
+#############################
+
+# An absolute path shortened against the current directory, so a command
+# printed for the user to copy is one they can actually paste.
+path_from_cwd() {
+    local abs="$1" here
+    here="$(pwd -P)"
+
+    if [[ "$abs" == "$here/"* ]]; then
+        printf '%s' "${abs#"$here"/}"
+    else
+        printf '%s' "$abs"
+    fi
+}
+
+# Position of a name in PIPELINE_STEPS, or empty if it is not in there.
+pipeline_index_of() {
+    local i
+    for i in "${!PIPELINE_STEPS[@]}"; do
+        [[ "${PIPELINE_STEPS[$i]}" == "$1" ]] && { printf '%s' "$i"; return 0; }
+    done
+    return 1
+}
+
+reject_range_name() {
+    echo "ERROR: '$1' is not a pipeline step, so it cannot end or start a range."
+    echo ""
+    echo "       Pipeline steps, in order:"
+    echo "         ${PIPELINE_STEPS[*]}"
+    echo ""
+    echo "       dump, check and init are not part of the pipeline - they read"
+    echo "       state rather than advancing it, so run them by name instead:"
+    echo "         bash qe.sh check <input>"
+    echo ""
+    echo "       Forms accepted:  --scf   --until=scf   --from=gen-band"
+    exit 1
+}
+
+if [[ -n "$STOP_AFTER" || -n "$START_FROM" ]]; then
+    # A range narrows 'all'. Asking for one step and a range at the same time
+    # is two different instructions, so say which one to drop rather than
+    # picking one silently.
+    if [[ "$STEP" != "all" ]]; then
+        echo "ERROR: step '$STEP' was given together with a range" \
+             "(${STOP_AFTER:+--$STOP_AFTER}${START_FROM:+ --from=$START_FROM})."
+        echo "       A range narrows the full pipeline, so drop one of the two:"
+        echo "         bash qe.sh $STEP <input>              just that step"
+        echo "         bash qe.sh <input> --${STOP_AFTER:-$START_FROM}" \
+             "       the pipeline, narrowed"
+        exit 1
+    fi
+
+    _first=0
+    _last=$(( ${#PIPELINE_STEPS[@]} - 1 ))
+
+    if [[ -n "$START_FROM" ]]; then
+        _first="$(pipeline_index_of "$START_FROM")" || reject_range_name "$START_FROM"
+    fi
+
+    if [[ -n "$STOP_AFTER" ]]; then
+        _last="$(pipeline_index_of "$STOP_AFTER")" || reject_range_name "$STOP_AFTER"
+    fi
+
+    if (( _first > _last )); then
+        echo "ERROR: --from=$START_FROM runs after --until=$STOP_AFTER," \
+             "so the range is empty."
+        echo "       Order in the pipeline: ${PIPELINE_STEPS[*]}"
+        exit 1
+    fi
+
+    PIPELINE_SKIPPED_BEFORE=( "${PIPELINE_STEPS[@]:0:$_first}" )
+    PIPELINE_SKIPPED_AFTER=( "${PIPELINE_STEPS[@]:$(( _last + 1 ))}" )
+    PIPELINE_STEPS=( "${PIPELINE_STEPS[@]:$_first:$(( _last - _first + 1 ))}" )
+
+    unset _first _last
 fi
 
 # A folder argument stands for every *_relax.in inside it: one folder, one
@@ -569,6 +721,7 @@ step_all() {
     echo "Case       : $CASE_NAME"
     echo "Work dir   : $INPUT_DIR"
     echo "Logs       : $LOGS_DIR"
+    echo "Steps      : $(step_description)"
     slurm_limits
     echo "========================================="
 
@@ -584,7 +737,20 @@ step_all() {
 
     echo ""
     echo "========================================="
-    echo "Workflow Finished Successfully"
+
+    # A narrowed run must never print the same line a full one does: the
+    # figures are the deliverable people look for, and "Finished Successfully"
+    # on a run that stopped at scf would read as though they exist.
+    if (( ${#PIPELINE_SKIPPED_AFTER[@]} == 0 )); then
+        echo "Workflow Finished Successfully"
+    else
+        echo "Stopped after '${PIPELINE_STEPS[-1]}', as asked."
+        echo ""
+        echo "Not run: ${PIPELINE_SKIPPED_AFTER[*]}"
+        echo "Continue with:"
+        echo "  bash qe.sh $(path_from_cwd "$INPUT_ABS") --from=${PIPELINE_SKIPPED_AFTER[0]}"
+    fi
+
     echo "========================================="
 }
 
@@ -655,7 +821,7 @@ FAILED=0
 if (( CASES_PARALLEL <= 1 )); then
     echo "========================================="
     echo "Quantum ESPRESSO Workflow - $NCASES cases, sequential"
-    echo "Step        : $STEP"
+    echo "Step        : $(step_description)"
     echo "Job id      : ${SLURM_JOB_ID:-<none>}"
     echo "Ranks       : $NPROC (each case gets the whole allocation)"
     echo "Pools       : $NPOOL"
@@ -710,7 +876,7 @@ else
 
     echo "========================================="
     echo "Quantum ESPRESSO Workflow - $NCASES cases, overlapped"
-    echo "Step          : $STEP"
+    echo "Step          : $(step_description)"
     echo "Job id        : ${SLURM_JOB_ID:-<none>}"
     echo "Total ranks   : $NPROC"
     echo "Ranks per case: $RANKS_PER_CASE"

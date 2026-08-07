@@ -1,8 +1,8 @@
-# REFERENSI
+# ARCHITECTURE
 
-Rujukan teknis QE_automation. Cara pemakaian ada di [`README.md`](README.md);
-file ini menjelaskan cara kerja bagian dalamnya, apa yang ditolak sistem
-beserta alasannya, dan batasan yang diketahui.
+Cara kerja bagian dalam QE_automation: aliran data antar tahap, alasan tiap
+penolakan, pengaturan, dan batasan yang diketahui. Cara pemakaian ada di
+[`README.md`](README.md).
 
 ---
 
@@ -36,10 +36,36 @@ sendiri asal tahap sebelumnya sudah menghasilkan yang dibacanya.
 Pertemuan di tengah itulah penyalinan yang ingin dihapus sistem ini: geometri
 hasil relaksasi dibaca satu kali, dipakai ketiga input hasil generate.
 
+## Menjalankan sebagian pipeline
+
+Urutan tahap tersimpan dalam satu array `PIPELINE_STEPS` di `qe.sh`. Penomoran
+tahap, isi file status, dan ringkasan akhir semuanya diturunkan dari panjang
+array itu, sehingga `--from` dan `--until` cukup diimplementasikan sebagai
+pemotongan array — tidak ada penghitung terpisah yang perlu disesuaikan.
+
+```
+--scf / --until=scf      potong sesudah 'scf'
+--from=gen-band          potong sebelum 'gen-band'
+```
+
+Dua konsekuensi yang disengaja:
+
+- Preflight pseudopotensial ikut menyempit. Rentang yang berhenti sebelum pw.x
+  pertama, misalnya `--parser` atau `--gen-scf`, tidak lagi tertahan oleh
+  `pseudo_dir` yang hanya ada di HPC.
+- Run yang dipersempit tidak pernah mencetak `Workflow Finished Successfully`.
+  Baris itu akan terbaca seolah gambar sudah jadi, padahal belum. Yang dicetak
+  adalah tahap terakhir yang dijalankan, daftar tahap yang dilewati, dan
+  perintah `--from` untuk melanjutkan.
+
+Nama tahap yang bukan bagian pipeline (`dump`, `check`, `init`) ditolak sebagai
+batas rentang, begitu pula rentang kosong dan penggabungan rentang dengan satu
+nama tahap.
+
 ## File per case
 
 ```
-<case>_relax.in                    input kamu
+<case>_relax.in                    file input
 <case>_band.path                   WAJIB untuk tahap band
 <case>_initial.cif                 struktur sebelum relaksasi
 <case>_relaxed.cif                 struktur sesudah relaksasi
@@ -52,7 +78,7 @@ logs/<case>.status.tsv             tahap mana yang jalan, dan bagaimana selesain
 <case>_band.png                    gambar               (plot)
 <case>_dos.png
 <case>_band_dos.png
-<case>_plot.py  atau  _plot.gnu    skrip penggambarnya - milikmu, bebas diedit
+<case>_plot.py  atau  _plot.gnu    skrip penggambarnya, bebas diedit
 ```
 
 ---
@@ -151,8 +177,8 @@ Cache, geometri, dan input hasil generate semuanya snapshot. Edit input maka
 cache dibaca ulang; ulangi relaksasi maka geometri diambil ulang; edit
 `<case>_band.path` lalu jalankan `band` tanpa `gen-band` maka tahap itu
 berhenti, bukan menyusuri jalur lama. Yang paling akhir ditulis, itu yang
-menang — termasuk kalau kamu sendiri yang mengedit input hasil generate, karena
-editanmu jadi yang termuda.
+menang — termasuk suntingan tangan pada input hasil generate, karena suntingan
+itu menjadi file termuda.
 
 Memakai mtime, bukan checksum: tidak butuh state tambahan, dan "harus lebih
 baru" berarti file yang ditulis pada detik yang sama tidak ikut memicunya.
@@ -162,7 +188,7 @@ baru" berarti file yang ditulis pada detik yang sama tidak ikut memicunya.
 `pseudo_dir` dan tiap `.upf` di `ATOMIC_SPECIES` diverifikasi untuk semua case
 sebelum case pertama mulai. pw.x baru menemukannya beberapa detik setelah job
 yang antre berjam-jam akhirnya jalan. Fatal hanya untuk tahap yang meluncurkan
-pw.x — menyiapkan input di laptop terhadap `pseudo_dir` milik cluster hanya
+pw.x — menyiapkan input di mesin lokal terhadap `pseudo_dir` milik cluster hanya
 mencetak catatan lalu lanjut.
 
 ## Dua case dalam satu folder menulis file yang sama

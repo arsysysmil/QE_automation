@@ -137,6 +137,25 @@ DEFAULT_MIXING_BETA="0.7"
 DEFAULT_SMEARING="mv"
 DEFAULT_DEGAUSS="0.02"
 
+# How many bands the band and nscf steps ask for when the input does not say:
+#
+#     nbnd = max(AUTO_NBND_FACTOR x occupied, occupied + 4)
+#
+# QE's own default is nelec/2 under occupations='fixed' - no conduction bands
+# at all, so the top half of the band and DOS figures is empty - and
+# max(1.2 x nelec/2, nelec/2 + 4) under smearing. Both are fine for the scf,
+# which is why the scf step never gets this; neither is enough for the two
+# steps that exist to show the empty states.
+#
+# 1.5 is a rule of thumb, not a converged number. A slab with thick vacuum
+# spends some of its empty bands on quantised vacuum states rather than on
+# the material, so raise it (or set nbnd in the input) when the conduction
+# bands you want are not in the figure.
+#
+# Every band is another diagonalisation, so this is not free. 0 turns it off
+# and leaves nbnd to QE. A value in the input always wins.
+AUTO_NBND_FACTOR="1.5"
+
 ##########
 # Relaxation
 ##########

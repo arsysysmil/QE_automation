@@ -3,15 +3,14 @@
 #
 # Sourced by qe.sh. Not executable on its own.
 
-# Why this is not the old "apply template/band.path to everything" bug coming
-# back: that one applied a Gamma-M-K-Gamma path unconditionally and said
-# nothing, so a cubic material got a hexagonal path and produced a plausible
-# looking, meaningless band structure. Here the lattice is *measured* from
-# CELL_PARAMETERS, the classification and the numbers behind it are printed,
-# and a cell that does not classify is refused rather than given a default.
+# The lattice is measured from CELL_PARAMETERS, the classification and the
+# numbers behind it are printed, and a cell that does not classify is refused
+# rather than given a default path. A path that does not belong to the lattice
+# produces a plausible looking, meaningless band structure with no error, so
+# nothing here is allowed to guess.
 #
-# It still writes a file you own: edit <case>_band.path afterwards and the
-# band step uses your version. init never overwrites without being asked.
+# The file it writes is yours: edit <case>_band.path afterwards and the band
+# step uses your version. init never overwrites without being asked.
 
 # Lattice vectors -> a, b, c, alpha, beta, gamma -> a Bravais class.
 # Ratios and angles only, so the unit of the CELL_PARAMETERS card does not
@@ -55,8 +54,7 @@ classify_lattice() {
             # Hexagonal, in either of the two settings QE inputs use. They are
             # the same lattice but NOT the same reciprocal basis, so K is at
             # (1/3,1/3,0) for gamma=120 and (2/3,1/3,0) for gamma=60. Getting
-            # this wrong puts the label "K" on a point inside the zone - see
-            # the note in MAINTENANCE.md.
+            # this wrong puts the label "K" on a point inside the zone.
             #
             # A slab is the same lattice with vacuum along c, and wants a path
             # with no k_z: sampling k_z of a vacuum gap is meaningless work.
@@ -73,10 +71,9 @@ classify_lattice() {
         } else if (ab && !bc && a90 && b90 && g90) {
             type = (c / a > 2.0) ? "tet_2d" : "tet"
         } else if (!ab && !bc && !ac && a90 && b90 && g90) {
-            # Same slab test as the hexagonal branch above. Phosphorene is the
-            # case that showed this was missing: orthorhombic with c/a = 7,
-            # i.e. 23 A of vacuum, and the 3D path spent four of its nine
-            # segments walking k_z through that vacuum.
+            # Same slab test as the hexagonal branch above. An orthorhombic
+            # slab such as phosphorene reaches c/a = 7, and a 3D path there
+            # spends four of its nine segments walking k_z through vacuum.
             type = (c / a > 2.0) ? "orc_2d" : "orc"
         }
 

@@ -8,24 +8,17 @@
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.out
 #
-# --partition and --time are the two lines to size per job, and they are the
-# two that decide whether it finishes. There was no --time at all until
-# 2026-08-02, which left the limit to whatever default the partition carries -
-# a number set by the cluster admins, not visible in this file, and free to
-# change without notice. A job that passes it is SIGKILLed.
+# --partition and --time size the job. A job that passes its time limit is
+# SIGKILLed, so both are set here rather than left to the partition default.
 #
-# 24 hours and `short` are a deliberately modest default, not a recommendation:
-# they fit a single small case. Ten WS2 cases at ~6.5 h each need three days on
-# a partition that allows them.
-#
-# Override per submission rather than editing this file - command-line flags
-# beat #SBATCH, and this file has to stay byte-identical across the three
-# copies (see MAINTENANCE.md section 6):
+# 24 hours on `short` fits a single small case. Size larger runs per
+# submission rather than editing this file - command-line flags beat #SBATCH,
+# and this file is meant to stay identical on every machine it is copied to:
 #
 #     sbatch -p medium-small -t 3-00:00:00 qe.sh cases/ws2_TS
 #
-# The limit actually in force is printed in the run header, so it is on the
-# first screen of the log rather than buried in the scheduler's settings.
+# Change -p and -t together. The limit actually in force is printed in the run
+# header.
 
 # Quantum ESPRESSO workflow.
 #
@@ -142,10 +135,9 @@ unset _lib
 # The steps
 #############################
 #
-# ONE list. `all` runs exactly this, in this order, and the "3/11" counters it
-# prints are derived from its length - so adding a stage is adding a line here,
-# not renumbering eleven labels and remembering to update two case statements
-# that used to list the step names separately.
+# ONE list. `all` runs exactly this, in this order, and the "3/13" counters it
+# prints are derived from its length, so adding a stage never means renumbering
+# anything.
 #
 # To add a stage (work function, PDOS, ...):
 #   1. write step_<name>() in the lib/ file it belongs to
@@ -277,10 +269,7 @@ esac
 #   qe.sh scf a_relax.in b_relax.in    -> step 'scf', two cases
 STEP="all"
 if [[ "$1" != *_relax.in ]]; then
-    # A folder argument is an input, not a step name. Without this test
-    # `qe.sh cases/gra` - the documented form, and the whole point of folder
-    # mode - was read as the step "cases/gra" and then failed with "no input
-    # file given", because a directory does not end in _relax.in either.
+    # A folder argument is an input, not a step name.
     #
     # A directory named after a real step (./scf) still resolves to the step;
     # the file form or a trailing slash disambiguates it.
@@ -297,16 +286,12 @@ if [[ $# -lt 1 ]]; then
     exit 1
 fi
 
-# A folder argument stands for every case inside it.
-#
-# This is the run.sh convention from the cluster - one folder, one job, its
-# cases one after another - without the part where you list the files by hand
-# and one of them is a typo. Adding a case to the folder adds it to the run;
-# there is no second place to keep in step.
+# A folder argument stands for every *_relax.in inside it: one folder, one
+# job, its cases one after another. Adding a case to the folder adds it to the
+# run.
 #
 # Non-recursive on purpose: the folder you name is the folder that runs.
-# Sub-folders are separate materials with separate jobs, and a recursive
-# sweep would make `qe.sh cases` a full-week accident.
+# Sub-folders are separate materials with separate jobs.
 EXPANDED=()
 for arg in "$@"; do
     if [[ -d "$arg" ]]; then
@@ -369,15 +354,11 @@ NCASES=${#INPUTS[@]}
 # there. They would also share <prefix>.save inside outdir.
 #
 # The parser derives an absent prefix from the case name, so a folder of
-# ordinary inputs can never collide. This catches the case that survives that:
-# inputs that set prefix explicitly, to the same string. Checked here, against
-# the file, because it costs milliseconds and the alternative is finding out
-# after the last case overwrites the first one's results.
+# ordinary inputs can never collide. This catches what survives that: inputs
+# that set prefix explicitly, to the same string.
+#
 # get_param() reads INPUT_ABS, so it is set per case here. setup_case() sets it
-# again before any step runs, so borrowing it for the preflight is safe - and
-# reading the key with the parser's own function rather than a second grep is
-# the point: two ways of reading `prefix` would eventually disagree, which is
-# the failure mode this project keeps having to fix.
+# again before any step runs, so borrowing it for the preflight is safe.
 declare -A SEEN_PREFIX=()
 declare -a PSEUDO_PROBLEMS=()
 declare -A PSEUDO_SEEN=()
@@ -471,9 +452,9 @@ done
 #############################
 
 # Steps are shell functions in this same process, so they inherit the module
-# environment directly. The old version had to invoke helpers via `bash -c`
-# specifically to avoid a login shell re-sourcing /etc/profile and swapping
-# mpirun for one that cannot launch an Intel-MPI-linked pw.x.
+# environment directly. Do not launch them through `bash -c`: a login shell
+# re-sources /etc/profile and can swap mpirun for one that cannot launch an
+# Intel-MPI-linked pw.x.
 # The step currently in flight, for the traps below. Empty between steps, so a
 # trap that fires with these set means the run died *inside* a step rather than
 # between them.

@@ -86,30 +86,13 @@ plot_fermi_from_out() {
 #
 # Taken from the NSCF run, NOT the SCF run.
 #
-# This used to read the SCF, on the reasoning that the band run and the NSCF
-# run are both non-self-consistent restarts of that one SCF charge density, so
-# the SCF was "the" common reference. That conflated two different things. The
-# eigenvalues do all come from the same charge density - but the Fermi level is
-# not read off the density, it is found by integrating occupations over the
-# k-point mesh, and the SCF mesh and the NSCF mesh are not the same mesh. A
-# coarse SCF mesh gives a poor E_F.
+# The Fermi level is not read off the charge density; it is found by
+# integrating occupations over the k-point mesh, and the SCF mesh is coarser
+# than the NSCF one. On a semiconductor an E_F from a coarse SCF mesh can land
+# outside the gap entirely, putting the zero line under the valence band.
 #
-# Measured on phosphorene, where the error is large enough to see:
-#
-#     VBM -2.1345    CBM -1.4888   (gap 0.646 eV)
-#     E_F from scf  (6x6x1)   -2.2887   BELOW the VBM - impossible for a
-#                                       semiconductor, and it put the zero
-#                                       line under the valence band so the
-#                                       band top stuck out above it
-#     E_F from nscf (12x12x1) -2.0755   inside the gap, correct
-#
-# Silicon has the same fault in the other direction (scf 6.7922 sits just
-# above its CBM at 6.7831; nscf gives 6.7489, inside the gap) - small enough
-# that nobody noticed until phosphorene made it obvious.
-#
-# The NSCF value is also the one dos.x writes into the DOS header, so this
-# keeps the band panel and the DOS panel on the same zero as the DOS data
-# itself, which the old order did not.
+# The NSCF value is also the one dos.x writes into the DOS header, so both
+# panels end up on the same zero as the DOS data itself.
 plot_fermi_energy() {
     local ef line
 
@@ -611,27 +594,14 @@ step_plot() {
 
     local data_prefix="$PREFIX"
 
-    # Migration: data written before an absent prefix defaulted to the case
-    # name is called pwscf.dos / pwscf.bands.dat.gnu. Those runs are finished
-    # and their figures should still be redrawable, so fall back to them - but
-    # only when this case has no data of its own, and only out loud. Delete
-    # this branch once no such folders are left.
-    if [[ ! -s "$INPUT_DIR/${PREFIX}.dos" && ! -s "$INPUT_DIR/${PREFIX}.bands.dat.gnu" \
-       && (   -s "$INPUT_DIR/pwscf.dos"   ||   -s "$INPUT_DIR/pwscf.bands.dat.gnu" ) ]]; then
-        data_prefix="pwscf"
-        echo "  note: no ${PREFIX}.* data here, but pwscf.* is present - plotting that."
-        echo "        It was written before an absent prefix defaulted to the case"
-        echo "        name. Re-running the pipeline will produce ${PREFIX}.* instead."
-    fi
-
     PLOT_DOS_FILE="$INPUT_DIR/${data_prefix}.dos"
     PLOT_BANDS_REL=""
     PLOT_BANDS_DN_REL=""
     PLOT_DOS_REL=""
 
     # An nspin=2 case has one file per channel. Both are drawn, in the same two
-    # colours the DOS panel already uses, so the two halves of the combined
-    # figure finally describe the same calculation.
+    # colours the DOS panel uses, so both halves of the combined figure
+    # describe the same calculation.
     if [[ -s "$INPUT_DIR/${data_prefix}.bands.up.dat.gnu" ]]; then
         PLOT_BANDS_REL="${data_prefix}.bands.up.dat.gnu"
         [[ -s "$INPUT_DIR/${data_prefix}.bands.dn.dat.gnu" ]] && \
@@ -639,8 +609,7 @@ step_plot() {
 
         if [[ -z "$PLOT_BANDS_DN_REL" ]]; then
             echo "  warning: ${data_prefix}.bands.up.dat.gnu is here but the spin-down"
-            echo "           file is not. The band panel will show spin up only, which"
-            echo "           is what this workflow used to do for every magnetic case."
+            echo "           file is not. The band panel will show spin up only."
             echo "           Re-run the bandsx step to produce both."
         fi
     elif [[ -s "$INPUT_DIR/${data_prefix}.bands.dat.gnu" ]]; then

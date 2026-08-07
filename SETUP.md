@@ -110,7 +110,7 @@ bash qe.sh cases/mos2/mos2_relax.in
 Di HPC:
 
 ```bash
-cd _scratch/arsy/QE_automation
+cd <folder-kerja>/QE_automation
 mkdir -p cases/mos2
 cp /lokasi/mos2_relax.in cases/mos2/
 bash qe.sh init cases/mos2/mos2_relax.in
@@ -139,7 +139,7 @@ bash qe.sh cases/ws2
 Di HPC:
 
 ```bash
-cd _scratch/arsy/QE_automation
+cd <folder-kerja>/QE_automation
 mkdir -p cases/ws2
 cp /lokasi/ws2_*_relax.in cases/ws2/
 bash qe.sh init cases/ws2
@@ -193,8 +193,8 @@ Nama `cases/` cuma kebiasaan, bukan keharusan. `qe.sh` menerima path mana pun,
 jadi folder data yang sudah ada bisa langsung ditunjuk:
 
 ```bash
-bash qe.sh init ../ws2/running_TS_semua
-sbatch -p medium-small -t 3-00:00:00 qe.sh ../ws2/running_TS_semua
+bash qe.sh init ../ws2/semua_TS
+sbatch -p medium-small -t 3-00:00:00 qe.sh ../ws2/semua_TS
 ```
 
 **`bash qe.sh init ...`** — membuat jalur band. Sistem mengukur panjang rusuk
@@ -272,10 +272,9 @@ Partisi yang tersedia:
 | `very-long` | 30 hari | 3 |
 | `interactive` | 2 jam | 2 |
 
-**Perangkap yang perlu diketahui:** kalau kamu menaikkan `-t` tapi lupa
-mengganti partisinya, SLURM di cluster ini **tidak menolak** — job diterima,
-lalu menggantung di antrean selamanya. Diuji langsung: minta 30 hari di `short`
-diterima tanpa keluhan. Penyebabnya `EnforcePartLimits = NO`.
+**Perangkap yang perlu diketahui:** kalau `-t` dinaikkan tapi partisinya lupa
+diganti, SLURM dengan `EnforcePartLimits = NO` **tidak menolak** — job
+diterima, lalu menggantung di antrean selamanya.
 
 Cirinya di `squeue` kolom paling kanan:
 
@@ -287,8 +286,9 @@ JOBID  PARTITION  ST  TIME  NODES  NODELIST(REASON)
 `PD` yang tidak pernah berubah, dengan alasan `PartitionTimeLimit`. Kalau
 melihat itu, `scancel` lalu submit ulang dengan partisi yang benar.
 
-Jadi `-p` dan `-t` selalu diubah **berpasangan**. Sepuluh case WS₂ dengan ~6,5
-jam per case butuh sekitar 65 jam, jadi `-p medium-small -t 3-00:00:00`.
+Jadi `-p` dan `-t` selalu diubah **berpasangan**. Perkirakan dulu total
+waktunya: sepuluh case dengan ~6,5 jam per case butuh sekitar 65 jam, jadi
+`-p medium-small -t 3-00:00:00`.
 
 Sesuaikan lewat baris perintah, jangan mengedit `qe.sh`, karena file itu harus
 tetap identik di laptop dan HPC. Batas yang benar-benar berlaku dicetak di
@@ -397,7 +397,7 @@ selesai dengan sukses, tapi hasilnya keliru.
 
 Kalau input menulis `nspin = 2`, `bands.x` dijalankan dua kali, sekali per kanal
 spin, dan grafik band menggambar keduanya: spin up garis penuh, spin down garis
-putus, warnanya sama dengan panel DOS di sebelahnya. Relevan untuk kasus NO₂.
+putus, warnanya sama dengan panel DOS di sebelahnya.
 
 Kasus non-magnetik tidak berubah sama sekali.
 
@@ -417,12 +417,12 @@ pesan penjelasan, dan perhitungan tetap dinyatakan berhasil — hanya gambarnya
 yang tidak dibuat. Salin folder materialnya ke laptop lalu gambar di sana:
 
 ```bash
-scp -r <hpc>:_scratch/arsy/QE_automation/cases/mos2 ~/QE_automation/cases/
+scp -r <hpc>:<folder-kerja>/QE_automation/cases/mos2 ~/QE_automation/cases/
 cd ~/QE_automation
 bash qe.sh plot cases/mos2/mos2_relax.in
 ```
 
 ---
 
-Dokumen lain: `README.md` menjelaskan cara kerja dan alasan rancangannya;
-`MAINTENANCE.md` untuk siapa pun yang akan mengubah kodenya.
+Dokumen lain: `README.md` — rujukan lengkap tahapan, syarat input, pemeriksaan
+yang dilakukan sistem, dan catatan untuk siapa pun yang akan mengubah kodenya.

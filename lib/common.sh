@@ -58,16 +58,10 @@ setup_case() {
     CACHE_DIR="$INPUT_DIR/cache"
     LOGS_DIR="$INPUT_DIR/logs"
 
-    # Per case, not per directory.
-    #
-    # These were cache/parser.cache and cache/structure.in - one pair for the
-    # whole folder. With one material per folder that was invisible; with a
-    # folder of cases it means gra1, gra2 and gra3 all write the same two
-    # files, and the last one to parse wins. A full pipeline happened to
-    # survive it because each case parses and then immediately consumes its
-    # own cache, but `qe.sh parser <folder>` followed later by
-    # `qe.sh gen-scf <folder>` would have generated all three scf inputs from
-    # gra3's parameters, silently, and CASES_PARALLEL > 1 would have raced.
+    # Per case, not per directory. A folder holding gra1, gra2 and gra3 must
+    # give each of them its own cache, or `qe.sh parser <folder>` followed
+    # later by `qe.sh gen-scf <folder>` would generate all three scf inputs
+    # from whichever case parsed last.
     STRUCTURE_FILE="$CACHE_DIR/${CASE_NAME}.structure.in"
     CACHE_FILE="$CACHE_DIR/${CASE_NAME}.parser.cache"
 
@@ -95,10 +89,9 @@ format_duration() {
 #
 # A job killed by the scheduler - walltime, scancel, OOM, a node dropping out -
 # gets SIGKILL, which no trap can catch and which leaves the output stream
-# ending mid-sentence. Before this file existed there was nothing on disk
-# saying which of the twelve steps was in flight when that happened: the last
-# line of slurm-<id>.out might be hours of pw.x output away from the step
-# header, and for a multi-case run the summary never printed at all.
+# ending mid-sentence. The last line of slurm-<id>.out can be hours of pw.x
+# output away from the step header that would name the stage, and for a
+# multi-case run the summary never prints at all.
 #
 # So the state is written to disk *before* each step starts, not after it
 # finishes. A step whose RUNNING line has no OK/FAILED line after it is a step
@@ -317,19 +310,9 @@ check_done() {
 # Steps hand state to each other through files: the input is parsed into
 # cache/<case>.parser.cache, the relax output into cache/<case>.structure.in,
 # and those two (plus <case>_band.path) into the generated scf/band/nscf
-# inputs. Every one of those is a snapshot, and nothing checked whether the
-# thing it was taken from had changed since.
-#
-# Measured, before this existed:
-#
-#     ecutwfc = 60  in the input   ->  <case>_scf.in says 60     correct
-#     (edit the input to 120)
-#     qe.sh gen-scf                ->  <case>_scf.in says 60     silently stale
-#
-# No warning, exit 0, "SCF input generated". And that is exactly the loop
-# README recommends for debugging: run one step, look, fix the input, run
-# again. The same shape as the config.sh-overwrites-smearing bug and the
-# dropped-passthrough bug - runs fine, different physics.
+# inputs. Every one of those is a snapshot of something that can change under
+# it: edit the input after generating <case>_scf.in and the generated file
+# still carries the old ecutwfc, with no warning and exit 0.
 #
 # The rule is one line: a derived file must not be OLDER than its sources.
 # Which also means hand-editing a generated input is still respected - your
@@ -377,18 +360,6 @@ assert_generated_fresh() {
 }
 
 require_cache() {
-    # Migration: cache/parser.cache and cache/structure.in were shared by every
-    # case in a folder before they were named per case. A folder written by the
-    # older layout still has them, and re-parsing is both cheap and the only
-    # correct answer - the old file may have been written by a different case.
-    # Delete this branch once no such folders are left.
-    if [[ ! -f "$CACHE_FILE" && -f "$CACHE_DIR/parser.cache" ]]; then
-        echo "  note: found cache/parser.cache from the older shared-cache layout."
-        echo "        It may have been written by a different case in this folder,"
-        echo "        so it is not trusted - re-parsing into $(basename "$CACHE_FILE")."
-        step_parser
-    fi
-
     if [[ ! -f "$CACHE_FILE" ]]; then
         echo "ERROR: $CACHE_FILE not found - run the 'parser' step first."
         exit 1
@@ -404,12 +375,11 @@ require_cache() {
 
     source "$CACHE_FILE"
 
-    # A cache from an older qe.sh has no CONTROL_EXTRA/SYSTEM_EXTRA fields.
-    # Sourcing it anyway would run with the passthrough quietly empty, which
-    # is indistinguishable from the passthrough being broken - so rebuild.
+    # A cache whose layout does not match this qe.sh is rebuilt rather than
+    # sourced: a missing field would leave the passthrough quietly empty.
     if [[ "${CACHE_VERSION:-0}" != "$CACHE_VERSION_EXPECTED" ]]; then
-        echo "  note: $CACHE_FILE was written by an older qe.sh" \
-             "(v${CACHE_VERSION:-0}, expected v${CACHE_VERSION_EXPECTED}) - refreshing it"
+        echo "  note: $CACHE_FILE is version ${CACHE_VERSION:-0}," \
+             "expected ${CACHE_VERSION_EXPECTED} - refreshing it"
         step_parser
         source "$CACHE_FILE"
     fi
@@ -435,13 +405,8 @@ require_structure() {
 #############################
 
 # Post-mortem on a case that has already run: which stages finished, and for
-# those that did not, why.
-#
-# v1 had this as a standalone script/check_job.sh you could point at any .out
-# file after the fact. Merging into one file turned check_done/diagnose_failure
-# into internals only reachable mid-run, and that was a real loss - the value
-# of a diagnosis is largely in reading it later. This restores it, over the
-# whole case rather than one file at a time.
+# those that did not, why. Runs over the whole case at any time, including
+# hours after the job ended.
 step_check() {
     local out label found=0 failed=0
 

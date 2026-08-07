@@ -10,3 +10,6 @@ slurm-*.out
 # editor leftovers
 *.swp
 *~
+
+# local-only notes: never pushed
+*.local.md

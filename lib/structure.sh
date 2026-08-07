@@ -70,10 +70,9 @@ relax_convergence_scan() {
     # criterion is per component - "the convergence criterion is satisfied when
     # all components of all forces are smaller than forc_conv_thr" - and the
     # norm is larger than any component by roughly sqrt(3N). Comparing the norm
-    # against forc_conv_thr therefore reports every many-atom cell as
-    # unconverged: phosphorene, whose four atoms all sit at components of
-    # ~0.0007 against a 1.0E-03 threshold, has a norm of 0.002004 and was
-    # flagged by exactly that mistake before this was written.
+    # against forc_conv_thr therefore reports many-atom cells as unconverged
+    # when they are not: four atoms at components of ~0.0007 against a
+    # 1.0E-03 threshold already give a norm of 0.002.
     # Stops at the force DECOMPOSITION, which QE prints between the force
     # listing and the `Total force` line:
     #
@@ -274,12 +273,11 @@ step_extract() {
     local CELL_BLOCK ATOMIC_BLOCK CELL_SOURCE
 
     # A vc-relax moves the cell, and QE prints the converged one in the
-    # "Begin final coordinates" block of the output. Until 2026-07-27 this
-    # read CELL_PARAMETERS from the *input* while reading ATOMIC_POSITIONS
-    # from the output, so every later step ran on the un-relaxed cell holding
-    # the relaxed positions - a structure that was never optimised and never
-    # reported as wrong. It also made the pipeline's "relaxed lattice
-    # constant" identical to the input value by construction.
+    # "Begin final coordinates" block of the output. Both halves of the
+    # structure must come from there: taking CELL_PARAMETERS from the input
+    # while taking ATOMIC_POSITIONS from the output hands every later step an
+    # un-relaxed cell holding relaxed positions, which is a structure that was
+    # never optimised.
     #
     # A plain 'relax' does not move the cell and prints no CELL_PARAMETERS,
     # so falling back to the input block is correct there, not a workaround.

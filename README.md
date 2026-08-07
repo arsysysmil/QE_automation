@@ -7,19 +7,13 @@ relax, structure extraction, scf, band structure, DOS, and the figures. The
 same command works on a laptop and on a Slurm cluster — it detects the machine
 rather than being configured for it.
 
-Rewrite of the older `QE_workflow` (v1). v1 is retired and its directory was
-deleted from the cluster on 2026-08-02 — everything it did is here, including
-its `script/check_job.sh`, which came back as the `check` step. The v1 tree
-itself is in git history at commit `d5129af` if it is ever needed.
-
 Layout: a thin `qe.sh` that resolves paths, loads settings, declares which
 steps exist and runs them, plus `lib/` with one file per concern. The files are
-*sourced* into one process, so there is one environment and one `config.sh` —
-which is what v1 got wrong, not the fact that it had several files.
+*sourced* into one process, so there is one environment and one `config.sh`.
 
-`SETUP.md` is the place to start if you want to *use* this. This file explains
-what it does and why it is built this way. `MAINTENANCE.md` records what state
-the code is in and which bugs are already fixed — read it before editing.
+`SETUP.md` is the usage manual, in Indonesian, and is the place to start if you
+want to run this. This file is the reference: the pipeline, the input contract,
+the checks, and what is not implemented.
 
 ## Workflow
 
@@ -56,11 +50,9 @@ are declared in `config.sh` for them.
     bash qe.sh                        # the full step list
 
 **Naming a folder is the normal way.** It stands for every `*_relax.in` inside
-it, in name order: one folder, one job, its cases one after another — the
-`run.sh` convention from the cluster, without the hand-written file list that
-goes stale. Adding a case to the folder adds it to the run, and nothing else has
-to be edited. Not recursive: the folder you name is the folder that runs, so
-`qe.sh cases` cannot become a week-long accident.
+it, in name order: one folder, one job, its cases one after another. Adding a
+case to the folder adds it to the run, and nothing else has to be edited. Not
+recursive: the folder you name is the folder that runs.
 
 Naming files instead is for picking a few out of a folder that holds more. A
 step name never ends in `_relax.in` and is never a directory, so all three forms
@@ -70,25 +62,49 @@ Cases run one after another, each getting the whole allocation. Every input is
 validated before anything starts, a failing case does not stop the others, and
 the summary names the step each failure stopped at. Exit code 1 if any failed.
 
-Sizing is done per submission rather than by editing `qe.sh`, since flags beat
-`#SBATCH` and this file has to stay byte-identical across copies:
+Size the job per submission rather than by editing `qe.sh`, since flags beat
+`#SBATCH` and this file is meant to stay identical across machines:
 
     sbatch -p medium-small -t 3-00:00:00 qe.sh cases/ws2_TS
 
-`-p` and `-t` move together. This cluster runs `EnforcePartLimits = NO`, so a
+`-p` and `-t` move together. Where the cluster runs `EnforcePartLimits = NO`, a
 job asking for more time than its partition allows is **accepted rather than
 rejected**, and then sits `PENDING` with reason `PartitionTimeLimit` forever.
-Verified: 30 days on a partition capped at 1 day was taken without complaint.
-The `#SBATCH --time=24:00:00` in the header is exactly the cap of the default
+The `#SBATCH --time=24:00:00` in the header matches the cap of the default
 `short` partition, so the defaults are consistent on their own.
 
-MEASURED, graphene + MoS2 in one job:
+`CASES_PARALLEL > 1` overlaps cases instead of running them in sequence. It is
+available but not recommended — it measured far slower here than sequential.
+See the note in `config.sh`.
 
-    sequential (CASES_PARALLEL=1, default)   3m07s
-    overlapped (CASES_PARALLEL=2)            45-51 min
+## Input contract
 
-Overlapping is available via `CASES_PARALLEL` but is not recommended here — see
-the note in `config.sh`.
+    <case>_relax.in     ibrav = 0 with an explicit CELL_PARAMETERS card,
+                        and K_POINTS automatic (or gamma for a molecule)
+    <case>_band.path    written for you by `qe.sh init <case>_relax.in`
+
+The file name must end in `_relax.in`; everything the case produces is named
+from the part before it. `calculation` must be `relax` or `vc-relax`.
+`&SYSTEM` must carry `ibrav`, `nat`, `ntyp`, `ecutwfc`; `&CONTROL` must carry
+`pseudo_dir`, and every `.UPF` named in `ATOMIC_SPECIES` must exist there.
+
+Two forms are refused on purpose:
+
+| Refused | Why |
+|---|---|
+| `ibrav != 0` (celldm / A,B,C) | no `CELL_PARAMETERS` card to hand between steps; fails at `extract` |
+| explicit k-list (`K_POINTS crystal` / `tpiba`) | no mesh for the nscf step to densify; rejected in step 1 |
+
+Both fail with a message naming the cause and the fix. Converting an
+`ibrav != 0` input means computing the three lattice vectors from `celldm`,
+writing them as a card, and setting `ibrav = 0`.
+
+Everything else has been checked and works: 2D slabs and 3D bulk of any Bravais
+lattice, insulators with `occupations='fixed'`, metals with smearing,
+spin-polarised (`nspin=2`, `starting_magnetization`), dispersion-corrected
+(`vdw_corr`), DFT+U in either the QE 6.x (`lda_plus_u`) or QE 7.x (`HUBBARD`)
+form, three or more species, and isolated molecules on `K_POINTS gamma` with
+`NPOOL_WANTED=1`.
 
 ## How state moves between steps
 
@@ -118,11 +134,17 @@ be re-run on its own once an earlier run has produced what it reads:
 That middle join is the copy-paste this workflow exists to remove: the relaxed
 geometry is read once and reused by all three generated inputs.
 
+One exception to "any step can be re-run on its own": **`bandsx` must not be
+re-run after `nscf`.** All four pw.x stages share one `outdir` and `prefix`, so
+once the pipeline has finished, the wavefunctions in `work/<prefix>.save` are
+the nscf ones, and a second `bandsx` would produce a "band structure" over the
+nscf mesh. Re-run `band` first, or run the whole pipeline.
+
 ## What it refuses, and why
 
-Every one of these is a failure that used to finish with exit 0 and different
-physics. Refusing is the point of the tool; automating the typing is a side
-effect.
+Every one of these is a failure that would otherwise finish with exit 0 and
+different physics. Refusing is the point of the tool; automating the typing is
+a side effect.
 
 **A relax that did not converge.** pw.x prints `JOB DONE.` whether or not the
 ionic minimisation converged — a BFGS run that exhausts `nstep` finishes
@@ -138,7 +160,8 @@ The largest remaining force component is compared against the run's own
 the final scf QE runs at the relaxed cell with recalculated G-vectors, so
 exceeding it there means the structure is converged in the basis it started
 from rather than in the correct one — Pulay stress, whose remedy is to re-run
-`vc-relax` from the final structure until the cell stops moving.
+`vc-relax` from the final structure until the cell stops moving, or to raise
+`ecutwfc` until the two agree.
 
 **A k-path that does not belong to the lattice.** `<case>_band.path` is
 required, never defaulted. `qe.sh init` measures the cell, classifies the
@@ -146,17 +169,21 @@ lattice, prints the classification, and writes the matching path — and refuses
 to guess when the cell does not classify. A hexagonal path on a cubic cell
 produces a clean band structure of the wrong thing.
 
+The hexagonal case has two settings that are the same lattice but not the same
+reciprocal basis: K is at (1/3, 1/3, 0) for γ = 120° and (2/3, 1/3, 0) for
+γ = 60°. `template/` holds an example path for each.
+
 **Parameters silently dropped when generating inputs.** `&CONTROL`, `&SYSTEM`
 and `&ELECTRONS` are copied through as raw lines minus the keys the generator
 writes itself, so `nbnd`, `nspin`, `starting_magnetization(1)`, `vdw_corr`, a
 `HUBBARD` card and anything else survive. The parser prints what it carried
-over. All 104 production inputs in this project use `vdw_corr = 'DFT-D3'`.
+over.
 
 **One spin channel standing in for two.** bands.x writes one channel per run
-and defaults to the first, so an `nspin=2` case used to give a spin-up band
-panel beside a two-channel DOS panel. The `bandsx` step now runs once per
-channel and both figures draw both, up solid and down dashed. Unpolarised
-cases are untouched — one pass, same file names.
+and defaults to the first, so an `nspin=2` case would give a spin-up band panel
+beside a two-channel DOS panel. The `bandsx` step runs once per channel and
+both figures draw both, up solid and down dashed. Unpolarised cases take the
+single-pass path.
 
 **Derived files older than their sources.** The cache, the geometry and the
 generated inputs are all snapshots. Edit the input and the cache is re-parsed;
@@ -176,6 +203,19 @@ their output after `prefix`, so a shared prefix means one `<prefix>.dos` and
 whichever case finished last. An absent prefix defaults to the case name; an
 explicitly shared one is refused before anything runs.
 
+## What it does not check
+
+These finish with exit 0 and are still your responsibility:
+
+- **Convergence of the parameters themselves** — vacuum thickness, `ecutwfc`,
+  the `ecutrho/ecutwfc` ratio (PAW wants 8–10×, not the default 4×), k-mesh
+  density. Run those tests separately, before using this.
+- **`nbnd`** is passed through but never raised. With `occupations='fixed'` QE
+  sets `nbnd = nelec/2` exactly, i.e. no conduction bands at all, and the upper
+  half of the band and DOS figures comes out empty. Set `nbnd` in `&SYSTEM`.
+- **Whether the k-path suits the lattice** — `init` prints its classification
+  for you to check; nothing verifies the path you keep.
+
 ## When a run is cut short
 
 Each step is recorded in `logs/<case>.status.tsv` *before* it starts, so a step
@@ -193,11 +233,8 @@ catch. `qe.sh check` turns that into a sentence:
       What killed it:
         sacct -j 412899 --format=JobID,State,ExitCode,Elapsed,Timelimit,MaxRSS
 
-Without it the only evidence is a Slurm log that stops mid-sentence, possibly
-hours of pw.x output away from the step header that would name the stage.
-
-`#SBATCH --time` is set rather than left to the partition default, and the
-limit actually in force is printed in the run header.
+There is no resume: a killed run leaves a half-written `work/`, so restart it
+with `rm -rf <case_dir>/{work,cache,logs}` first.
 
 ## The structure as CIF
 
@@ -229,7 +266,9 @@ down from the cluster:
 whichever the machine has. Both produce the same figures. Rather than drawing
 directly, the step writes `<case>_plot.py` (or `.gnu`) next to the data and runs
 that — so tuning a figure is editing a normal script with a settings block at
-the top and re-running it on its own.
+the top and re-running it on its own. `PLOT_EMIN` / `PLOT_EMAX` in `config.sh`
+set the energy window for new plots; the same values appear as `EMIN, EMAX` at
+the top of the generated script for an existing one.
 
 Deliberately **fail-soft**. It is the last step of a pipeline that may have run
 for hours, and a compute node without matplotlib is not a reason to mark a
@@ -247,18 +286,15 @@ so the copies stay byte-identical (check with `md5sum`). Drop `sbatch`:
 `NPOOL` is clamped to a divisor of it, and pw.x is taken from PATH. If pw.x is
 not there, the run says so before starting rather than failing inside MPI.
 
-When `short` is full on the cluster — which it often is — the same job starts
-immediately on `sbatch -p interactive qe.sh ...`. Those nodes are shared, so
-size any `-t` for a contended run, not an idle one.
-
-## What it takes to add a new material
-
-    <case>_relax.in     ibrav = 0 with an explicit CELL_PARAMETERS card,
-                        and K_POINTS automatic (or gamma for a molecule)
-    <case>_band.path    written for you by `qe.sh init <case>_relax.in`
-
-`SETUP.md` is the full checklist, including the material types this has been
-checked against and the two that are rejected on purpose.
+`NPOOL` passes `-nk` to `pw.x` and `bands.x`. Pools split the ranks into groups
+that each take a subset of the k-points, which keeps each group's share of
+plane waves large — without them, a small cell on many ranks leaves some ranks
+with zero G-vectors and `bands.x` aborts with
+`Error in routine diropn (3): wrong record length`. Constraints: `NPROC` must
+divide by `NPOOL`, and `NPOOL` must not exceed the number of k-points. Both are
+checked before anything is launched. `bands.x` gets the same flag deliberately
+— post-processing has to use the pool layout of the run that produced the
+wavefunctions. `dos.x` gets none.
 
 ## Files
 
@@ -274,13 +310,9 @@ checked against and the two that are rejected on purpose.
     lib/init.sh                        lattice detection + band path
     lib/plot.sh                        band / DOS figures from the finished data
     SETUP.md                           how to use it
-    MAINTENANCE.md                     what is fixed, deliberate, and still open
     template/
       band.path.hex_gamma60_example      reference k-path, NOT applied automatically
-
-Adding a stage is two edits: write `step_<name>()` in the `lib/` file it belongs
-to, then add `<name>` to `PIPELINE_STEPS` in `qe.sh` where it runs. The step
-counters (`4/13`) come from that list, so nothing needs renumbering.
+      band.path.hex_gamma120_example
 
 Per case, next to the input file:
 
@@ -299,218 +331,40 @@ Per case, next to the input file:
     <case>_band_dos.png
     <case>_plot.py  or  _plot.gnu      the script that drew them - yours to edit
 
-## Verified
+## Working on the code
 
-Graphene, 2 atoms, full pipeline, both pseudopotential families:
+Adding a stage is two edits: write `step_<name>()` in the `lib/` file it belongs
+to, then add `<name>` to `PIPELINE_STEPS` in `qe.sh` where it runs. The step
+counters (`4/13`) come from that list, so nothing needs renumbering.
 
-    PAW   C.pbe-n-kjpaw_psl.1.0.0.UPF   40 Ry   COMPLETED 0:0   1m14s
-    ONCV  C_ONCV_PBE-1.0.upf            60 Ry   COMPLETED 0:0   1m32s
+Every step except the four that launch MPI runs on a login node in seconds, so
+a change can be checked without submitting anything:
 
-Cross-check on the result, not just the exit code: the two families put the
-Fermi level at -2.322 eV and -2.333 eV, and the DOS goes to ~0 there, which is
-the Dirac point of a semimetal.
+    bash qe.sh parser   <case>_relax.in
+    bash qe.sh dump     <case>_relax.in
+    bash qe.sh extract  <case>_relax.in     # needs an existing <case>_relax.out
+    bash qe.sh gen-scf  <case>_relax.in
+    bash qe.sh gen-band <case>_relax.in
+    bash qe.sh gen-nscf <case>_relax.in
 
-That run also reported a "relaxed lattice constant" of 2.460 A, exactly its own
-input. Read as evidence of a converged cell it was worthless — the cell was
-being copied from the input rather than from the relax, the bug fixed in §7
-below. The Fermi level and DOS cross-check stand; the lattice constant claim
-did not, and has been dropped.
+A hand-written `<case>_relax.out` containing nothing but a
+`Begin final coordinates` block is enough to exercise `extract` and all three
+generators. Make its final cell differ from the input cell, so the two sources
+are distinguishable in the extracted structure.
 
-Those directories are workflow tests, not publishable physics — the cutoffs
-were picked to exercise the pipeline, not converged.
+There are no automated tests. When `short` is full, `sbatch -p interactive`
+starts immediately, but those nodes are shared — size any `-t` for a contended
+run, not an idle one.
 
-### Against an external reference (2026-07-29)
+## Not implemented
 
-Two materials from the CMPT Tohoku QE tutorial, chosen because neither was
-written for this workflow — both use `ibrav != 0` with `celldm`, and both start
-from `scf` rather than `relax`, so each had to be converted first. Cutoffs and
-meshes were reduced to keep them quick on a laptop, so the numbers are close to
-but not exactly the tutorial's.
-
-    silicon        FCC, converted from ibrav=2, spin-orbit dropped
-                   indirect gap 0.573 eV, CBM ~0.85 of the way G->X,
-                   valence bandwidth 11.97 eV
-    phosphorene    orthorhombic slab, converted from ibrav=8
-                   direct gap 0.646 eV at G
-
-Both band structures reproduce the shape of the tutorial's published figures
-along the same paths. PBE underestimating silicon's gap (0.57 vs 1.17 eV
-experimental) is the functional behaving normally, not a workflow error.
-
-Phosphorene is what showed `init` had no 2D variant for orthorhombic: at
-c/a = 7 it was handed the 3D path, four of whose nine segments run along the
-vacuum direction. `orc_2d` and `tet_2d` were added in response.
-
-### Against this project's own production data (2026-08-02)
-
-The convergence check was run over the 40 finished relaxations on the cluster:
-**38 converged, 1 stopped at the BFGS step limit** (`mos2_no2_H3`, largest
-remaining force component 0.0042 Ry/au against a 1.0E-03 threshold), **1
-interrupted**. The one that ran out of steps had previously passed as a success.
-
-## What changed from v1
-
-### 1. Fewer files, and none of them a separate process
-
-`run.sh` plus ten scripts in `script/` became `qe.sh` plus the `lib/` files.
-
-The count was never the point — v1's problem was that each helper was its own
-process with its own `config.sh`. These are **sourced**, so there is one
-environment and one settings file, and `emit_pw_input()` exists once instead of
-being copied three times.
-
-Deleted along the way:
-
-- The preflight loop checking that all eight helper scripts exist. `qe.sh` still
-  verifies its `lib/` files are present, but as one loop with a message naming
-  the missing file, not eight scattered checks.
-- Most of `get_script_dir()`. Not fully gone: Slurm hands the batch script to
-  the compute node as a spooled copy whose directory contains neither
-  `config.sh` nor `template/`, so `resolve_root_dir()` still has to fall back to
-  `SLURM_SUBMIT_DIR`. What the merge removes is the failure mode where eight
-  separate helpers had to be found; what remains is a single lookup that
-  verifies `config.sh` is actually present before accepting a candidate
-  directory, instead of assuming it.
-- The `bash -c` wrapper around every step. That existed to stop a login shell
-  re-sourcing `/etc/profile` and swapping `mpirun` for one that cannot launch an
-  Intel-MPI-linked `pw.x`. Steps are now shell functions in the same process and
-  inherit the module environment directly.
-- ~225 lines of duplication across `generate_scf.sh` / `generate_band.sh` /
-  `generate_nscf.sh`. Those three were 91/109/115 lines differing by only ~35
-  lines each; the shared part is now one `emit_pw_input()` function.
-
-### 2. config.sh no longer overwrites your input file  <-- correctness fix
-
-The old `generate_band.sh` and `generate_nscf.sh` did:
-
-    source cache/parser.cache      # your input's real values
-    source config.sh               # then clobbered three of them
-
-`config.sh` defined bare `SMEARING`, `DEGAUSS` and `MIXING_BETA` — the same
-names `parser.cache` writes. Sourcing it second silently replaced whatever the
-input file said. `generate_scf.sh` did not source `config.sh`, so SCF escaped it
-and band/nscf did not.
-
-Real effect, from the graphene run of 2026-07-24:
-
-    gra_relax.in   smearing = 'mp'   degauss = 0.01     <- what was written
-    gra_scf.in     smearing = 'mp'   degauss = 0.01     <- correct
-    gra_band.in    smearing = 'mv'   degauss = 0.02     <- silently replaced
-
-SCF and the band structure were computed with different smearing. The WS2 runs
-were unaffected only by coincidence: their inputs already used `mv`/`0.02`,
-identical to the config defaults.
-
-In v2 these are `DEFAULT_SMEARING`, `DEFAULT_DEGAUSS`, `DEFAULT_MIXING_BETA`,
-`DEFAULT_CONV_THR`. They apply only when the input omits the key, and print a
-note when they do. A value in the input always wins.
-
-### 3. The band k-path is per case, and never guessed
-
-The old `template/band.path` held a Gamma-M-K-Gamma path and was applied to
-every material unconditionally. That path is correct only for a hexagonal
-Brillouin zone. It worked for MoS2, WS2 and graphene because all three are
-hexagonal; any other lattice would have produced a band structure along the
-wrong path with no error at all.
-
-v2 requires `<case>_band.path` next to the input and fails loudly if it is
-missing. `template/band.path.hex_gamma60_example` is a reference to copy from,
-not a default.
-
-### 4. Parameters are required only when they mean something
-
-The old parser rejected any input missing `occupations`, `smearing`, `degauss`,
-`conv_thr` or `mixing_beta`, regardless of the material. An insulator using
-`occupations='fixed'` has no use for `smearing`/`degauss`, and QE ignores them
-there.
-
-v2 requires `smearing`/`degauss` only when `occupations='smearing'`, and when
-`occupations` is anything else they are not written into the generated inputs at
-all. `conv_thr`/`mixing_beta` fall back to the `DEFAULT_*` values.
-
-### 5. NSCF k-mesh scaling respects the actual cell
-
-The old `generate_nscf.sh` scaled only x and y, assuming every material is a 2D
-slab like MoS2/WS2. v2 reads `cell_dofree` from the input: a cell declared 2D
-keeps its single k-point along z, anything else gets all three scaled.
-
-    2D  (cell_dofree='2Dxy')   15 15 1  ->  30 30 1
-    3D  (no cell_dofree)        8  8 8  ->  16 16 16
-
-### 6. k-point pools, which is what actually fixed "PAW does not work"
-
-The band step used to abort with:
-
-    Error in routine diropn (3): wrong record length
-
-This looked like a PAW problem because the PAW run crashed and the ONCV run did
-not. It is not. `diropn` raises that error when the record length it is given is
-<= 0. The wavefunction record length is `nbnd * npwx`, and `npwx` is the
-plane-wave count *on one MPI rank*. With 64 ranks splitting a two-atom cell,
-some ranks receive zero plane waves, so the length is 0. QE says so first, in
-the line everyone scrolls past:
-
-    Message from routine sym_rho_init:
-    some processors have no G-vectors for symmetrization
-
-PAW only made it more likely, by allowing a lower cutoff: at 40 Ry the PAW run
-had 24261 G-vectors, while the ONCV run at 60 Ry had 44515 — enough to go round
-64 ranks. The same failure would hit ONCV on a smaller cell or a lower cutoff,
-and it explains why MoS2/WS2 never tripped it: more electrons, bigger cell, more
-plane waves.
-
-Measured directly, PAW graphene, 64 ranks, everything else identical:
-
-    NPOOL=1    2 no-G-vector warnings    CRASH
-    NPOOL=4    0 warnings                SUCCESS
-    NPOOL=8    0 warnings                SUCCESS
-    NPOOL=16   0 warnings                SUCCESS
-
-`NPOOL` in config.sh (default 4) now passes `-nk` to `pw.x` and `bands.x`. Pools
-split the ranks into groups that each take a subset of the k-points, so each
-group's share of plane waves stays large. It is also faster: the full PAW
-pipeline finishes in 1m14s, against 1m32s for the unpooled ONCV run.
-
-`bands.x` gets the same flag deliberately — post-processing has to use the pool
-layout of the run that produced the wavefunctions.
-
-Constraints: `NPROC` must divide by `NPOOL`, and `NPOOL` must not exceed the
-number of k-points. Both are checked before anything is launched, and
-`diagnose_failure()` explains these two aborts (plus a missing pseudopotential)
-if they ever come back.
-
-### 7. A vc-relax now keeps the cell it relaxed to  <-- correctness fix
-
-`step_extract()` took `ATOMIC_POSITIONS` from the relax *output* and
-`CELL_PARAMETERS` from the relax *input*. Every step after it therefore ran a
-`vc-relax` case on the un-relaxed cell holding the relaxed positions — a
-structure that was never optimised, and nothing said so.
-
-The cell now comes from the `Begin final coordinates` block of the output,
-falling back to the input only when the output has none — which is the correct
-answer for a plain `relax`, where the cell does not move. A `vc-` calculation
-missing that block warns instead. `step_extract()` prints which source each half
-came from.
-
-Inherited from v1, whose `script/extract_structure.sh` still has the bug — see
-`git show d5129af:script/extract_structure.sh`.
-
-### 8. Parameters outside the parser's 16 keys are no longer dropped  <-- correctness fix
-
-The generated scf/band/nscf inputs contained only what `get_param()` knew how to
-read. Everything else in the input was silently gone: `nbnd`, `nspin`,
-`starting_magnetization`, `vdw_corr`, `tefield`/`dipfield`, `edir`, `tot_charge`,
-`input_dft`.
-
-For the MoS2 gas-sensor inputs that meant an SCF without the `DFT-D3` dispersion
-correction, and a non-magnetic band structure for the `nspin=2` NO2 case. Same
-shape as the `nbnd = 120` bug in `../mos2/README.md`: no error, different
-physics.
-
-See `MAINTENANCE.md` §1.2 for what is deliberately dropped and why.
-
-## Not changed
-
-- `pw.x` / `bands.x` / `dos.x` invocation, MPI setup, and module list are the
-  same as the old pipeline.
-- `slurm-<jobid>.out` still lands in this directory.
+- `ibrav != 0` is not converted to `CELL_PARAMETERS`; that conversion is manual.
+- No automated test suite.
+- A job cut short cannot be resumed, only restarted.
+- PDOS and the work function.
+- The 2D lattice test is `c/a > 2.0`, which is right for monolayers and wrong
+  for genuinely layered 3D crystals such as graphite (c/a = 2.7) or bulk
+  2H-MoS₂ (c/a = 3.9) — both would lose the Γ–A dispersion.
+- `convergence NOT achieved` in an scf is caught but not diagnosed, so it
+  prints raw pw.x output rather than a hint about `mixing_beta`, `conv_thr` or
+  `diagonalization`.

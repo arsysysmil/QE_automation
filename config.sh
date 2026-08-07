@@ -9,10 +9,9 @@
 # ECUTRHO, OCCUPATIONS, SMEARING, DEGAUSS, CONV_THR, MIXING_BETA, CELL_DOFREE,
 # ATOMIC_SPECIES, K_POINTS).
 #
-# This used to be violated: config.sh defined bare SMEARING/DEGAUSS/
-# MIXING_BETA, and generate_band.sh / generate_nscf.sh source config.sh AFTER
-# parser.cache, so those three silently replaced whatever the input file said.
-# Fallbacks are prefixed DEFAULT_ for exactly that reason.
+# config.sh is sourced after parser.cache, so a name collision would silently
+# replace whatever the input file said. Fallbacks are prefixed DEFAULT_ for
+# exactly that reason.
 
 ##########
 # MPI
@@ -73,7 +72,7 @@ fi
 # k-points. qe.sh rejects a gamma-only case unless NPOOL is 1.
 NPOOL_WANTED=4
 
-# NPROC is no longer a fixed 64, so a hardcoded NPOOL would abort on any core
+# NPROC varies with the machine, so a hardcoded NPOOL would abort on any core
 # count it does not divide (a 6-core laptop against NPOOL=4). Take the largest
 # divisor of NPROC that does not exceed what was asked for.
 NPOOL=1
@@ -115,7 +114,7 @@ PW="pw.x"
 BANDS="bands.x"
 DOS="dos.x"
 
-# Declared for the stages in README.md that are not implemented yet.
+# Declared for the PDOS and work-function stages, which are not implemented.
 PROJWFC="projwfc.x"
 PP="pp.x"
 AVERAGE="average.x"

@@ -24,14 +24,11 @@ get_param() {
 # Everything the input declares inside one namelist, minus the keys this
 # script writes itself.
 #
-# Without this only the 16 keys get_param() knows about survived into the
-# generated scf/band/nscf inputs, and everything else was dropped in silence:
-# nbnd, nspin, starting_magnetization, vdw_corr, tefield/dipfield, edir,
-# tot_charge, input_dft, assume_isolated... A MoS2 input with
-# vdw_corr='DFT-D3' therefore produced an SCF *without* the dispersion
-# correction, and the nspin=2 NO2 input produced a non-magnetic band
-# structure. Same failure mode as the nbnd=120 bug: no error, different
-# physics.
+# get_param() knows 16 keys. Everything else the input declares - nbnd, nspin,
+# starting_magnetization, vdw_corr, tefield/dipfield, edir, tot_charge,
+# input_dft, assume_isolated - has to reach the generated scf/band/nscf inputs
+# too, or they describe different physics from the relax with no error to say
+# so.
 #
 # Copied as raw lines rather than parsed into variables, so indexed keys
 # (starting_magnetization(1) = 0.5) and forms this script has never heard of
@@ -205,12 +202,8 @@ step_parser() {
     #
     # bands.x and dos.x name their output after the prefix - <prefix>.dos,
     # <prefix>.bands.dat.gnu - and so does the save directory inside outdir.
-    # With the old 'pwscf' default every case in a folder produced files of
-    # the same name, so a folder holding gra1 and gra2 ended up with one
-    # pwscf.dos: whichever ran last. The generated inputs were already named
-    # per case (gra1_scf.in, gra2_scf.in), which made the collision harder to
-    # notice, not less real. SETUP.md carried "one material, one folder" as a
-    # rule the user had to remember; deriving the prefix removes the rule.
+    # QE's own 'pwscf' default would give every case in a folder the same file
+    # names, leaving one pwscf.dos: whichever ran last.
     #
     # An input that sets prefix itself still wins - and qe.sh refuses to start
     # when two cases in one directory would end up sharing one.
@@ -229,10 +222,10 @@ step_parser() {
     SMEARING=$(get_param smearing)
     DEGAUSS=$(get_param degauss)
 
-    # Values the input omits fall back to config.sh's DEFAULT_* entries.
-    # Those names are deliberately namespaced: the old layout used bare
-    # SMEARING/DEGAUSS/MIXING_BETA in config.sh, which then overwrote the
-    # values parsed from the input file whenever config.sh was sourced last.
+    # Values the input omits fall back to config.sh's DEFAULT_* entries. The
+    # DEFAULT_ prefix is required: a bare SMEARING/DEGAUSS/MIXING_BETA in
+    # config.sh would collide with these variables and overwrite what the
+    # input file said.
     CONV_THR=$(get_param conv_thr)
     if [[ -z "$CONV_THR" ]]; then
         CONV_THR="${DEFAULT_CONV_THR:-1.0d-6}"
@@ -249,8 +242,8 @@ step_parser() {
     CELL_DOFREE=$(get_param cell_dofree)
 
     # Read for information only - nspin and noncolin stay in SYSTEM_EXTRA and
-    # are emitted from there, exactly as before. They are named here because
-    # step_bandsx has to KNOW the calculation is spin-polarised: bands.x writes
+    # are emitted from there. They are named here because step_bandsx has to
+    # KNOW the calculation is spin-polarised: bands.x writes
     # one spin channel per run and defaults to the first, so an nspin=2 case
     # needs two passes. Deliberately NOT added to DROP_SYSTEM - dropping them
     # from the passthrough would remove them from the generated inputs.
@@ -305,9 +298,9 @@ step_parser() {
         if [[ -z "${!var}" ]]; then
             echo "ERROR: $var not found in $INPUT_ABS"
             if [[ "$var" == "IBRAV" ]]; then
-                echo "       Add 'ibrav = 0' to &SYSTEM. It used to be copied through"
-                echo "       empty, producing 'ibrav =' in the generated inputs and a"
-                echo "       namelist read error from pw.x three steps later."
+                echo "       Add 'ibrav = 0' to &SYSTEM. Without it the generated"
+                echo "       inputs would carry an empty 'ibrav =' and pw.x would"
+                echo "       fail on the namelist several steps later."
             fi
             exit 1
         fi
@@ -355,10 +348,9 @@ step_parser() {
         exit 1
     fi
 
-    # Checked here, in the first step, rather than where it is used. The nscf
-    # generator is step 9 of 11, so an unsupported K_POINTS form used to abort
-    # only after the relax, scf, band and bands.x steps had already run - a
-    # typo costing hours instead of seconds.
+    # Checked here, in the first step, rather than in the nscf generator that
+    # needs it. Otherwise an unsupported K_POINTS form aborts only after the
+    # relax, scf, band and bands.x steps have already run.
     case "$K_POINTS_MODE" in
         automatic)
             if [[ -z "$K_POINTS_LINE" ]]; then

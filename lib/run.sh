@@ -53,16 +53,12 @@ run_bandsx_once() {
 
 # bands.x writes ONE spin channel per run, and `spin_component` defaults to 1.
 #
-# For an nspin=2 case that meant the band figure showed spin up only, while the
-# DOS panel beside it showed both channels - dos.x writes both without being
-# asked. The two halves of <case>_band_dos.png disagreed, and nothing said so.
-# MAINTENANCE.md carried this as an open item with the note that no nspin=2 case
-# had gone through the workflow yet; 30 of the project's own production inputs
-# have nspin=2, all of them the NO2 adsorption cases, where the spin splitting
-# is the physics being reported.
+# dos.x writes both channels without being asked, so for an nspin=2 case a
+# single bands.x pass leaves the two halves of <case>_band_dos.png describing
+# different things: spin up in the band panel, both spins in the DOS panel.
+# Hence one pass per channel here.
 #
-# Unpolarised runs are untouched: same single pass, same <prefix>.bands.dat, so
-# every existing case and its finished data keep working.
+# Unpolarised runs are untouched: same single pass, same <prefix>.bands.dat.
 #
 # noncolin is not the same thing. There the two channels are not separable and
 # spin_component means nothing to bands.x, so it takes the single-pass path.
@@ -120,14 +116,13 @@ EOF
 # The relax is the one step that can finish cleanly and still hand on a useless
 # result: pw.x prints JOB DONE. whether or not the ionic minimisation
 # converged. Checked here as well as in step_extract so a full pipeline stops
-# at 2/12 instead of after the scf has run.
+# at step 2 instead of after the scf has run.
 step_relax() { require_cache; run_pw "$RELAX_IN"; assert_relax_converged "$RELAX_OUT"; }
 
 # The other three check that the input they are about to run is not older than
 # what it was generated from. The band step also watches <case>_band.path:
 # editing the k-path and then running `band` without `gen-band` would walk the
-# OLD path and produce a clean band structure of the wrong thing - the exact
-# failure README section 3 exists to prevent.
+# OLD path and produce a clean band structure of the wrong thing.
 step_scf() {
     require_cache
     assert_generated_fresh "$SCF_IN" gen-scf "$INPUT_ABS" "$CACHE_FILE" "$STRUCTURE_FILE"
